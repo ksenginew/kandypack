@@ -1,11 +1,11 @@
 import os
-from contextlib import contextmanager
 from typing import Any, NamedTuple, Optional
 from urllib.parse import quote
 import streamlit as st
 from psycopg import Connection
 from psycopg.rows import namedtuple_row
 from psycopg_pool import ConnectionPool
+from pandas import DataFrame
 
 DATABASE_URL = os.getenv("DATABASE_URL", st.secrets.get("DATABASE_URL"))
 
@@ -24,13 +24,8 @@ def get_connection_pool(
 
 pool = get_connection_pool(DATABASE_URL)
 
-
-@contextmanager
 def get_connection():
-    """Provides a connection from the pool that safely works with 'with get_connection() as conn:'."""
-    with pool.connection() as conn:
-        yield conn
-
+    return pool.connection()
 
 def execute_query(query: str, params: Optional[Any] = None):
     with pool.connection() as conn:
@@ -52,6 +47,13 @@ def fetch_all(query: str, params: Optional[Any] = None):
             cur.execute(query, params)
             return cur.fetchall()
 
+def fetch_data(query: str, params: Optional[Any] = None):
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            columns = [desc[0] for desc in cur.description]
+            records = cur.fetchall()
+    return DataFrame(records, columns=columns)
 
 def safe_execute_query(query: str, params: Optional[Any] = None):
     try:
