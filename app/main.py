@@ -16,6 +16,10 @@ if st.session_state.authenticated:
     st.button("Sign Out", on_click=logout, type="primary")
     pg = st.navigation([
         st.Page("./routes/0_Dashboard.py"),
+        st.Page("./routes/11_Stores.py"),
+        st.Page("./routes/12_Routes.py"),
+        st.Page("./routes/13_Trucks.py"),
+        st.Page("./routes/14_Employees.py"),
         st.Page("./routes/1_Master_Data_and_Fleet.py"),
         st.Page("./routes/2_Customer_Order_Processing.py"),
         st.Page("./routes/3_Railway_Bulk_Transport.py"),
