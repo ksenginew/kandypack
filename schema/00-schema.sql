@@ -177,8 +177,6 @@ CREATE TABLE order_items (
     order_id              BIGINT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     product_id            BIGINT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
     unit_price            NUMERIC(12, 2) NOT NULL CHECK (unit_price >= 0),
-    quantity              INTEGER NOT NULL CHECK (quantity > 0),
-    total_price           NUMERIC(14, 2) GENERATED ALWAYS AS (quantity * unit_price) STORED,
     item_lifecycle_status enum_item_lifecycle_status NOT NULL DEFAULT 'PLACED',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP

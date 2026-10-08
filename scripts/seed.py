@@ -1,4 +1,3 @@
-
 from datetime import datetime, timedelta, timezone
 import json
 import random
@@ -7,7 +6,7 @@ import uuid
 
 random.seed(42)
 OUTPUT_FILE = "schema/01-seed.sql"
-BASE_TIME = datetime(2024, 8, 1, 8, 0, 0, tzinfo=timezone.utc)
+BASE_TIME = datetime(2026, 10, 9, 8, 0, 0, tzinfo=timezone.utc)
 
 
 FIRST_NAMES = [
@@ -374,12 +373,12 @@ def main():
                 if item_status == "PLACED" and random.random() < 0.05:
                     item_status = "CANCELLED"
 
-                
-                order_items.append((
-                    item_id, o_id, p_id, unit_price, qty,
-                    item_status, order_dt, order_dt
-                ))
-                item_id += 1
+                for _ in range(qty):
+                    order_items.append((
+                        item_id, o_id, p_id, unit_price,
+                        item_status, order_dt, order_dt
+                    ))
+                    item_id += 1
 
         write_bulk_insert(
             f, "orders",
@@ -390,7 +389,7 @@ def main():
 
         write_bulk_insert(
             f, "order_items",
-            ["id", "order_id", "product_id", "unit_price", "quantity", "item_lifecycle_status", "created_at", "updated_at"],
+            ["id", "order_id", "product_id", "unit_price", "item_lifecycle_status", "created_at", "updated_at"],
             order_items
         )
         total_rows += len(order_items)
