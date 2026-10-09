@@ -166,7 +166,7 @@ def render_order_items_interface():
         selected_row = render_datatable(data=fetch_order_items, total_count=total_count, key=f"items_tbl_{current_order_id}_{status_filter}")
 
     with toolbar_container:
-        ic1, ic2, ic3, ic4 = st.columns([1, 1, 6, 1])
+        ic1, ic2, ic3, ic4 = st.columns([2, 2, 6, 2])
         with ic1:
             if st.button("Edit", key="edit_grouped_item_btn", use_container_width=True, disabled=(selected_row is None)):
                 edit_item_dialog(int(selected_row[0]["id"]))
@@ -174,5 +174,5 @@ def render_order_items_interface():
             if st.button("Delete", key="delete_grouped_item_btn", use_container_width=True, disabled=(selected_row is None)):
                 delete_item_dialog(int(selected_row[0]["id"]))
         with ic4:
-            if st.button("Add Items", key="add_grouped_item_btn", use_container_width=True):
+            if st.button("Add", key="add_grouped_item_btn", use_container_width=True):
                 add_items_dialog(current_order_id)

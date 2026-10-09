@@ -143,9 +143,9 @@ def render_orders_interface(on_select_order=None):
         selected_row = render_datatable(data=fetch_orders, total_count=total_count, key="orders_datatable")
 
     with toolbar_container:
-        c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 5, 1])
+        c1, c2, c3, c4, c5 = st.columns([2,2,2,4,2])
         with c1:
-            if st.button("View Items", key="view_order_items_btn", use_container_width=True, disabled=(selected_row is None)):
+            if st.button("View", key="view_order_items_btn", use_container_width=True, disabled=(selected_row is None)):
                 oid = int(selected_row[0]["id"])
                 st.session_state["selected_order_id"] = oid
                 if on_select_order:
