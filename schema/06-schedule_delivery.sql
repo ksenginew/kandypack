@@ -1,12 +1,5 @@
--- Last-mile schedule validation and an optional procedure wrapper.
--- Apply this file to an existing database without rerunning 00-schema.sql.
--- Intervals are [start, end); only a zero gap makes deliveries consecutive.
--- Working weeks run Monday 00:00 to Monday 00:00 in Asia/Colombo.
 BEGIN;
 
--- Serialize roster writes before validation. Updating this singleton also
--- causes stale REPEATABLE READ / SERIALIZABLE writers to fail and retry,
--- rather than validating aggregate hours against an outdated snapshot.
 CREATE TABLE IF NOT EXISTS road_delivery_validation_guard (
     singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     version BOOLEAN NOT NULL DEFAULT FALSE
@@ -26,8 +19,6 @@ BEGIN
 END;
 $$;
 
--- NOT VALID keeps legacy seed records intact, while enforcing the check on
--- every new or updated row. Legacy data can be audited and validated later.
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -103,8 +94,6 @@ BEGIN
             MESSAGE = 'A driver cannot work two consecutive deliveries without a gap.';
     END IF;
 
-    -- Test all three positions: inserting a trip between two existing trips
-    -- must not turn an assistant's roster into a chain of three deliveries.
     IF EXISTS (
         SELECT 1 FROM truck_schedules a
         JOIN truck_schedules b ON b.assistant_id = a.assistant_id
@@ -118,8 +107,6 @@ BEGIN
             MESSAGE = 'An assistant cannot work more than two consecutive routes without a gap.';
     END IF;
 
-    -- Compute unrounded elapsed time in each week, including overnight and
-    -- cross-week trips. Do not charge an entire trip to its departure week.
     FOR v_week_start IN
         SELECT local_week AT TIME ZONE 'Asia/Colombo'
         FROM generate_series(
@@ -159,8 +146,6 @@ BEGIN
 END;
 $$;
 
--- A route-limit reduction or employee-role change must not invalidate a
--- roster indirectly. These triggers supplement the other modules' triggers.
 CREATE OR REPLACE FUNCTION enforce_road_delivery_reference_change()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 DECLARE

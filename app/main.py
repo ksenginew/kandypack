@@ -12,7 +12,6 @@ def logout():
     st.rerun()
 
 if st.session_state.authenticated:
-    st.success(f"Logged in as **{st.session_state.user}**")
     st.button("Sign Out", on_click=logout, type="primary")
     pg = st.navigation([
         st.Page("./routes/0_Dashboard.py"),

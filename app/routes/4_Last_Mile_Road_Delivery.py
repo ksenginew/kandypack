@@ -1,5 +1,3 @@
-"""Database-backed CRUD for last-mile delivery schedules and crew rosters."""
-
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
