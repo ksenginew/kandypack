@@ -47,9 +47,12 @@ def render_datatable(
 
     selected_indices = getattr(event.selection, "rows", [])
     if selected_indices:
-        selected_data = result.iloc[selected_indices]
-        st.session_state[f"{key}_selected"] = selected_data
-        return selected_data.to_dict(orient="records")
+        try:
+            selected_data = result.iloc[selected_indices]
+            st.session_state[f"{key}_selected"] = selected_data
+            return selected_data.to_dict(orient="records")
+        except IndexError:
+            pass
     else:
         st.session_state[f"{key}_selected"] = None
         return None
