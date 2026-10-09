@@ -43,7 +43,7 @@ def edit_user_dialog(user_id: str):
         role = st.selectbox("Role", USER_ROLES, index=USER_ROLES.index(user.role) if user.role in USER_ROLES else 0)
 
         if st.form_submit_button("Save Changes"):
-            execute_query("UPDATE users role = %s WHERE id = %s;", (role, user_id))
+            execute_query("UPDATE users SET role = %s WHERE id = %s;", (role, user_id))
             st.success("User updated!")
             st.rerun()
 
