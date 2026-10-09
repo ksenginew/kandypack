@@ -68,8 +68,37 @@ def schedule_form(schedule=None):
         return st.selectbox(label, options, index=options.index(current_id) if current_id in options else 0,
                             format_func=labels.get, key=key)
 
+    if schedule is None:
+        # Keep the route outside the form so changing it refreshes item choices.
+        route_id = selection("Route", route_labels, None, f"{prefix}_route")
+        items = fetch_all(
+            """SELECT i.id, i.order_id, p.product_name, i.quantity
+               FROM order_items i
+               JOIN orders o ON o.id = i.order_id
+               JOIN products p ON p.id = i.product_id
+               WHERE o.route_id = %s AND i.item_lifecycle_status = 'STORE_RECEIVED'
+                 AND NOT EXISTS (SELECT 1 FROM truck_item_deliveries d
+                                 WHERE d.order_item_id = i.id)
+               ORDER BY i.order_id, i.id""",
+            (route_id,),
+        )
+        item_labels = {
+            i.id: f"Order #{i.order_id} / Item #{i.id}: {i.product_name} (Qty: {i.quantity})"
+            for i in items
+        }
+
     with st.form(f"{prefix}_form"):
-        route_id = selection("Route", route_labels, schedule.route_id if schedule else None, f"{prefix}_route")
+        if schedule is not None:
+            route_id = selection("Route", route_labels, schedule.route_id, f"{prefix}_route")
+        else:
+            st.multiselect(
+                "Order Items", list(item_labels), format_func=item_labels.get,
+                key=f"{prefix}_order_items_{route_id}", disabled=not items,
+                placeholder="Select order items" if items else "No eligible order items",
+            )
+            if not items:
+                st.info("No unassigned, store-received order items are available for this route.")
+            st.caption("Order item selections are for preview only and will not be saved yet.")
         truck_id = selection("Truck", truck_labels, schedule.truck_id if schedule else None, f"{prefix}_truck")
         col1, col2 = st.columns(2)
         with col1:
