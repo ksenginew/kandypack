@@ -27,27 +27,29 @@ if st.session_state.authenticated:
     # Domain-organized Navigation Hierarchy
     nav_sections = {
         "Overview": [
-            st.Page("routes/0_Dashboard.py", title="Dashboard", icon="📊", default=True),
+            st.Page("routes/00_Dashboard.py", title="Dashboard", icon="📊", default=True),
         ],
         "Sales & Commerce": [
-            st.Page("routes/1_Sales_Orders.py", title="Orders & Items", icon="🛒"),
-            st.Page("routes/2_Sales_Catalog.py", title="Customers & Products", icon="👥"),
+            st.Page("routes/01_Sales_Orders.py", title="Orders & Items", icon="🛒"),
+            st.Page("routes/02_Sales_Catalog.py", title="Customers & Products", icon="👥"),
         ],
         "Logistics & Dispatch": [
-            st.Page("routes/3_Train_Logistics.py", title="Rail Bulk Manifest", icon="🚆"),
-            st.Page("routes/4_Truck_Logistics.py", title="Last-Mile Dispatch", icon="📦"),
+            st.Page("routes/03_Train_Logistics.py", title="Rail Bulk Manifest", icon="🚆"),
+            st.Page("routes/04_Truck_Logistics.py", title="Last-Mile Dispatch", icon="📦"),
         ],
         "Fleet & Operations": [
-            st.Page("routes/5_Fleet_Routes.py", title="Fleet & Routes", icon="🚛"),
-            st.Page("routes/6_Staff.py", title="Staff & Drivers", icon="👷"),
+            st.Page("routes/05_Fleet_Routes.py", title="Fleet & Routes", icon="🚛"),
+            st.Page("routes/06_Staff.py", title="Staff & Drivers", icon="👷"),
         ],
     }
 
     # Add Admin section conditionally based on RBAC
     if user_role == "admin":
         nav_sections["Administration"] = [
-            st.Page("routes/7_Admin_Stores.py", title="Store Hubs", icon="🏬"),
-            st.Page("routes/8_Admin_Users.py", title="User Access Control", icon="🔑"),
+            st.Page("routes/07_Admin_Stores.py", title="Store Hubs", icon="🏬"),
+            st.Page("routes/08_Admin_Users.py", title="User Access Control", icon="🔑"),
+            st.Page("routes/09_Reports.py", title="Reports & Analytics", icon="📈"),
+            st.Page("routes/10_Assistant.py", title="Assistant Dashboard", icon="🤖"),
         ]
 
     # Non-admin users with specific roles can also be filtered if needed

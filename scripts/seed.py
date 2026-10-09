@@ -341,7 +341,7 @@ def main():
 
             days_offset = (o_id // 15)  
             order_dt = BASE_TIME - timedelta(days=40) + timedelta(days=days_offset, hours=random.randint(0, 12))
-            delivery_dt = order_dt + timedelta(days=random.randint(1, 3), hours=random.randint(2, 6))
+            delivery_dt = order_dt + timedelta(days=random.randint(7, 9), hours=random.randint(2, 6))
             slot = random.choice(TIME_SLOTS)
 
             orders.append((
