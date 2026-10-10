@@ -62,6 +62,7 @@ BEGIN
                   AND product_id = OLD.product_id
                   AND unit_price = OLD.unit_price
                   AND item_lifecycle_status = OLD.item_lifecycle_status
+                ORDER BY id DESC  
                 LIMIT v_diff
             );
 

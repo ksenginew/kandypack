@@ -63,7 +63,7 @@ def create_order_dialog():
         with c1:
             delivery_date = st.date_input("Delivery Date", min_value=datetime.date.today())
         with c2:
-            time_slot = st.selectbox("Preferred Slot", ["Morning (9am - 1pm)", "Afternoon (1pm - 5pm)", "Evening (5pm - 9pm)"])
+            time_slot = st.selectbox("Preferred Slot", ["Morning (08:00 - 11:00)", "Midday (11:00 - 14:00)", "Afternoon (14:00 - 17:00)","Evening (17:00 - 20:00)"])
 
         if st.form_submit_button("Place Order"):
             if not delivery_address.strip() or not contact_phone.strip():
