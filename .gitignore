@@ -220,6 +220,3 @@ __marimo__/
 .streamlit/secrets.toml
 
 secrets/
-
-# Local last-mile implementation notes
-/CHANGELOG-road-delivery.md
