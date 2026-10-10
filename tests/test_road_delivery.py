@@ -87,6 +87,174 @@ class RoadDeliveryTests(unittest.TestCase):
         if message:
             self.assertIn(message, str(caught.exception))
 
+    def received_order(self, route=1, statuses=("STORE_RECEIVED", "STORE_RECEIVED")):
+        customer = self.conn.execute("""INSERT INTO customers (customer_name, address, contact_phone)
+            VALUES ('Delivery customer', 'Delivery address', '0771234567') RETURNING id""").fetchone()[0]
+        product = self.conn.execute("""INSERT INTO products (product_name, unit_price, space_consumption_unit)
+            VALUES ('Delivery product', 10, 1) RETURNING id""").fetchone()[0]
+        order = self.conn.execute("""INSERT INTO orders
+            (customer_id, route_id, delivery_address, contact_phone, delivery_date)
+            VALUES (%s, %s, 'Delivery address', '0771234567', '2026-10-05') RETURNING id""",
+            (customer, route)).fetchone()[0]
+        for status in statuses:
+            self.conn.execute("""INSERT INTO order_items
+                (order_id, product_id, unit_price, quantity, item_lifecycle_status)
+                VALUES (%s, %s, 10, 2, %s)""", (order, product, status))
+        return order
+
+    def order_delivery(self, orders, route=1, actor=None, conn=None):
+        return (conn or self.conn).execute("""SELECT create_received_order_delivery(
+            1, %s, 1, 5, '2026-10-05 08:00+05:30', '2026-10-05 10:00+05:30', %s, %s)""",
+            (route, orders, actor)).fetchone()[0]
+
+    def test_complete_orders_assigned_atomically(self):
+        orders = [self.received_order(), self.received_order()]
+        schedule = self.order_delivery(orders)
+        assigned = self.conn.execute("""SELECT count(*), count(DISTINCT i.order_id)
+            FROM truck_item_deliveries d JOIN order_items i ON i.id = d.order_item_id
+            WHERE d.truck_schedule_id = %s""", (schedule,)).fetchone()
+        self.assertEqual(assigned, (4, 2))
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM order_items WHERE item_lifecycle_status = 'STORE_RECEIVED'").fetchone()[0], 4)
+
+    def test_unreceived_empty_and_wrong_route_orders_rejected(self):
+        valid = self.received_order()
+        invalid_orders = [self.received_order(statuses=("STORE_RECEIVED", "IN_TRANSIT")),
+                          self.received_order(statuses=()), self.received_order(route=2)]
+        for order in invalid_orders:
+            self.rejected(lambda: self.order_delivery([valid, order]))
+            self.assertEqual(self.conn.execute("SELECT count(*) FROM truck_schedules").fetchone()[0], 0)
+            self.assertEqual(self.conn.execute("SELECT count(*) FROM truck_item_deliveries").fetchone()[0], 0)
+        self.rejected(lambda: self.order_delivery([]), "at least one")
+        self.rejected(lambda: self.order_delivery([999999]), "no longer exists")
+
+    def test_assigned_order_cannot_be_scheduled_again(self):
+        order = self.received_order()
+        self.order_delivery([order])
+        self.rejected(lambda: self.order_delivery([order]), "no longer available")
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM truck_schedules").fetchone()[0], 1)
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM truck_item_deliveries").fetchone()[0], 2)
+
+    def test_equivalent_duplicate_route_accepts_received_order(self):
+        route = self.conn.execute("""INSERT INTO routes (store_id, route_name, service_area, max_delivery_time_hrs)
+            SELECT store_id, route_name, service_area, max_delivery_time_hrs FROM routes WHERE id = 1
+            RETURNING id""").fetchone()[0]
+        order = self.received_order(route=route)
+        schedule = self.order_delivery([order])
+        self.assertIsNotNone(schedule)
+        self.rejected(lambda: self.conn.execute("UPDATE truck_schedules SET route_id = 2 WHERE id = %s", (schedule,)),
+                      "match all assigned orders")
+
+    def test_manager_and_resources_must_belong_to_delivery_store(self):
+        manager = self.conn.execute("""INSERT INTO users (name, email, password_hash, role)
+            VALUES ('Manager', 'manager@example.com', 'unused', 'store_manager') RETURNING id""").fetchone()[0]
+        order = self.received_order()
+        self.rejected(lambda: self.order_delivery([order], actor=manager), "managed store")
+        self.conn.execute("UPDATE stores SET manager_id = %s WHERE id = 1", (manager,))
+        other_store = self.conn.execute("INSERT INTO stores (store_name, address) VALUES ('Other hub', 'Other city') RETURNING id").fetchone()[0]
+        for table, record in (("trucks", 1), ("employees", 1), ("employees", 5)):
+            with self.conn.transaction(force_rollback=True):
+                self.conn.execute(sql.SQL("UPDATE {} SET store_id = %s WHERE id = %s").format(sql.Identifier(table)),
+                                  (other_store, record))
+                self.rejected(lambda: self.order_delivery([order], actor=manager), "delivery store")
+        self.assertIsNotNone(self.order_delivery([order], actor=manager))
+
+    def test_concurrent_assignment_of_same_order(self):
+        order = self.received_order()
+        self.conn.commit()
+        first = psycopg.connect(self.test_url)
+        second = psycopg.connect(self.test_url)
+        started = threading.Event()
+        finished = threading.Event()
+        results = []
+        worker = None
+        try:
+            self.order_delivery([order], conn=first)
+
+            def attempt():
+                started.set()
+                try:
+                    self.order_delivery([order], conn=second)
+                    second.commit()
+                    results.append("accepted")
+                except psycopg.Error as error:
+                    second.rollback()
+                    results.append(error.sqlstate)
+                finally:
+                    finished.set()
+
+            worker = threading.Thread(target=attempt, daemon=True)
+            worker.start()
+            self.assertTrue(started.wait(2))
+            self.assertFalse(finished.wait(0.2))
+            first.commit()
+            self.assertTrue(finished.wait(5))
+            worker.join(1)
+            self.assertEqual(results, ["23514"])
+            self.assertEqual(self.conn.execute("SELECT count(*) FROM truck_item_deliveries").fetchone()[0], 2)
+        finally:
+            first.rollback()
+            if worker is not None:
+                worker.join(5)
+            first.close()
+            second.close()
+            with psycopg.connect(self.test_url) as cleanup:
+                cleanup.execute("DELETE FROM truck_schedules")
+                cleanup.execute("DELETE FROM orders WHERE id = %s", (order,))
+
+    def test_ui_store_manager_scope(self):
+        from streamlit.testing.v1 import AppTest
+        from types import SimpleNamespace
+
+        sys.path.insert(0, str(ROOT / "app"))
+        manager = self.conn.execute("""INSERT INTO users (name, email, password_hash, role)
+            VALUES ('Store manager', 'scope@example.com', 'unused', 'store_manager') RETURNING id""").fetchone()[0]
+        other_manager = self.conn.execute("""INSERT INTO users (name, email, password_hash, role)
+            VALUES ('Other manager', 'other@example.com', 'unused', 'store_manager') RETURNING id""").fetchone()[0]
+        self.conn.execute("UPDATE stores SET manager_id = %s WHERE id = 1", (manager,))
+        other_store = self.conn.execute("""INSERT INTO stores (store_name, address, manager_id)
+            VALUES ('Other delivery hub', 'Other address', %s) RETURNING id""", (other_manager,)).fetchone()[0]
+        other_route = self.conn.execute("""INSERT INTO routes (store_id, route_name, service_area, max_delivery_time_hrs)
+            VALUES (%s, 'Other route', 'Other area', 12) RETURNING id""", (other_store,)).fetchone()[0]
+        own_order = self.received_order()
+        other_order = self.received_order(route=other_route)
+        self.conn.commit()
+        old_url = os.environ.get("DATABASE_URL")
+        os.environ["DATABASE_URL"] = self.test_url
+        try:
+            script = (
+                "import runpy\n"
+                f"page = runpy.run_path({str(ROOT / 'app/routes/4_Last_Mile_Road_Delivery.py')!r})\n"
+                "page['schedule_form']()\n"
+            )
+            at = AppTest.from_string(script, default_timeout=10)
+            at.secrets["DATABASE_URL"] = self.test_url
+            at.session_state["user"] = SimpleNamespace(id=manager, role="store_manager")
+            at.run()
+            self.assertFalse(at.exception, [e.message for e in at.exception])
+            self.assertEqual(len(at.selectbox(key="schedule_create_route").options), 2)
+            at.selectbox(key="schedule_create_route").set_value(1).run()
+            orders = at.multiselect(key="schedule_create_orders_1").options
+            self.assertEqual(len(orders), 1)
+            self.assertIn(f"Order #{own_order}:", orders[0])
+            self.assertEqual(len(at.selectbox(key="schedule_create_driver").options), 4)
+            self.assertTrue(all("Other route" not in option for option in at.selectbox(key="schedule_create_route").options))
+            at.session_state["user"] = SimpleNamespace(id=other_manager, role="store_manager")
+            at.run()
+            self.assertFalse(at.exception, [e.message for e in at.exception])
+            self.assertEqual(at.selectbox(key="schedule_create_route").options, ["Other route (maximum 12.00 hours)"])
+            self.assertFalse(at.multiselect)  # This store has no truck or crew yet.
+        finally:
+            self.conn.rollback()
+            with psycopg.connect(self.test_url) as cleanup:
+                cleanup.execute("DELETE FROM orders WHERE id = ANY(%s)", ([own_order, other_order],))
+                cleanup.execute("UPDATE stores SET manager_id = NULL WHERE id = 1")
+                cleanup.execute("DELETE FROM stores WHERE id = %s", (other_store,))
+                cleanup.execute("DELETE FROM users WHERE id = ANY(%s)", ([manager, other_manager],))
+            if old_url is None:
+                os.environ.pop("DATABASE_URL", None)
+            else:
+                os.environ["DATABASE_URL"] = old_url
+
     def test_crud(self):
         schedule = self.book()
         self.conn.execute("UPDATE truck_schedules SET end_timestamp = '2026-10-05 11:00+05:30' WHERE id = %s", (schedule,))
@@ -276,13 +444,95 @@ class RoadDeliveryTests(unittest.TestCase):
     def test_serializable_stale_writer_retries(self):
         self.concurrent_attempt("SERIALIZABLE")
 
+    def test_ui_duplicate_options_and_existing_assignments(self):
+        from streamlit.testing.v1 import AppTest
+
+        sys.path.insert(0, str(ROOT / "app"))
+        old_url = os.environ.get("DATABASE_URL")
+        os.environ["DATABASE_URL"] = self.test_url
+        employee_ids = []
+        route_id = None
+        schedule_id = None
+        try:
+            route_id = self.conn.execute("""INSERT INTO routes
+                (store_id, route_name, service_area, max_delivery_time_hrs)
+                SELECT store_id, route_name, service_area, max_delivery_time_hrs
+                FROM routes WHERE id = 1 RETURNING id""").fetchone()[0]
+            for original_id in (1, 5):
+                employee_ids.append(self.conn.execute("""INSERT INTO employees
+                    (store_id, employee_name, employee_role, contact_phone, employee_status)
+                    SELECT store_id, employee_name, employee_role, contact_phone, employee_status
+                    FROM employees WHERE id = %s RETURNING id""", (original_id,)).fetchone()[0])
+            # A different phone identifies another person with the same name.
+            employee_ids.append(self.conn.execute("""INSERT INTO employees
+                (store_id, employee_name, employee_role, contact_phone)
+                VALUES (1, 'Driver 1', 'DRIVER', '0777654321') RETURNING id""").fetchone()[0])
+            schedule_id = self.book(driver=employee_ids[0], assistant=employee_ids[1], route=route_id)
+            self.conn.commit()
+            script = (
+                "import runpy\nimport streamlit as st\n"
+                f"page = runpy.run_path({str(ROOT / 'app/routes/4_Last_Mile_Road_Delivery.py')!r})\n"
+                "schedule_id = st.session_state.get('options_test_schedule_id')\n"
+                "if schedule_id is None: page['schedule_form']()\n"
+                "else: page['edit_schedule_dialog'].__wrapped__(schedule_id)\n"
+            )
+            at = AppTest.from_string(script, default_timeout=10)
+            at.secrets["DATABASE_URL"] = self.test_url
+            at.run()
+            self.assertFalse(at.exception, [e.message for e in at.exception])
+            expected_counts = {"route": 2, "driver": 5, "assistant": 4}
+            for field, count in expected_counts.items():
+                options = at.selectbox(key=f"schedule_create_{field}").options
+                self.assertEqual(len(options), count)
+                self.assertEqual(len(options), len(set(options)))
+            # Both people named Driver 1 remain selectable and distinguishable.
+            driver = at.selectbox(key="schedule_create_driver")
+            for employee_id in (1, employee_ids[2]):
+                driver.set_value(employee_id).run()
+                self.assertFalse(at.exception, [e.message for e in at.exception])
+                self.assertEqual(at.selectbox(key="schedule_create_driver").value, employee_id)
+
+            at.session_state["options_test_schedule_id"] = schedule_id
+            at.run()
+            self.assertFalse(at.exception, [e.message for e in at.exception])
+            for field, expected_id in (("route", route_id), ("driver", employee_ids[0]),
+                                       ("assistant", employee_ids[1])):
+                widget = at.selectbox(key=f"schedule_edit_{schedule_id}_{field}")
+                self.assertEqual(widget.value, expected_id)
+                self.assertEqual(len(widget.options), expected_counts[field])
+                self.assertEqual(len(widget.options), len(set(widget.options)))
+            at.time_input(key=f"schedule_edit_{schedule_id}_end_time").set_value(time(11))
+            next(b for b in at.button if b.label == "Save Changes").click().run()
+            self.assertFalse(at.exception, [e.message for e in at.exception])
+            self.assertFalse(at.error, [e.value for e in at.error])
+            assignments = self.conn.execute("""SELECT route_id, driver_id, assistant_id
+                FROM truck_schedules WHERE id = %s""", (schedule_id,)).fetchone()
+            self.assertEqual(assignments, (route_id, employee_ids[0], employee_ids[1]))
+        finally:
+            self.conn.rollback()
+            with psycopg.connect(self.test_url) as cleanup:
+                if schedule_id is not None:
+                    cleanup.execute("DELETE FROM truck_schedules WHERE id = %s", (schedule_id,))
+                cleanup.execute("DELETE FROM employees WHERE id = ANY(%s)", (employee_ids,))
+                if route_id is not None:
+                    cleanup.execute("DELETE FROM routes WHERE id = %s", (route_id,))
+            if old_url is None:
+                os.environ.pop("DATABASE_URL", None)
+            else:
+                os.environ["DATABASE_URL"] = old_url
+
     def test_ui_create_read_edit_delete_and_validation(self):
         from streamlit.testing.v1 import AppTest
 
         sys.path.insert(0, str(ROOT / "app"))
         old_url = os.environ.get("DATABASE_URL")
         os.environ["DATABASE_URL"] = self.test_url
+        order_ids = []
         try:
+            order_ids = [self.received_order(), self.received_order(),
+                         self.received_order(statuses=("STORE_RECEIVED", "IN_TRANSIT")),
+                         self.received_order(route=2)]
+            self.conn.commit()
             # AppTest does not reproduce browser dialog-fragment submissions.
             # Render the real dialog bodies inline to test their forms and CRUD.
             script = (
@@ -304,14 +554,27 @@ class RoadDeliveryTests(unittest.TestCase):
             at.run()
             self.assertFalse(at.exception, [e.message for e in at.exception])
 
-            def fill_create_form():
+            at.selectbox(key="schedule_create_route").set_value(1).run()
+            received = at.multiselect(key="schedule_create_orders_1")
+            self.assertEqual(len(received.options), 2)
+            self.assertTrue(all("Order #" in option for option in received.options))
+            at.selectbox(key="schedule_create_route").set_value(2).run()
+            self.assertEqual(len(at.multiselect(key="schedule_create_orders_2").options), 1)
+            at.selectbox(key="schedule_create_route").set_value(1).run()
+
+            def fill_create_form(order_id):
                 at.selectbox(key="schedule_create_route").set_value(1)
+                at.multiselect(key="schedule_create_orders_1").set_value([order_id])
                 at.date_input(key="schedule_create_start_date").set_value(date(2026, 10, 5))
                 at.date_input(key="schedule_create_end_date").set_value(date(2026, 10, 5))
                 at.time_input(key="schedule_create_start_time").set_value(time(8))
                 at.time_input(key="schedule_create_end_time").set_value(time(10))
 
-            fill_create_form()
+            # Empty selections must not create a schedule.
+            next(b for b in at.button if b.label == "Create Schedule").click().run()
+            self.assertTrue(any("at least one received order" in e.value for e in at.error))
+            self.assertEqual(self.conn.execute("SELECT count(*) FROM truck_schedules").fetchone()[0], 0)
+            fill_create_form(order_ids[0])
             next(b for b in at.button if b.label == "Create Schedule").click().run()
             self.assertFalse(at.exception, [e.message for e in at.exception])
             self.assertEqual(self.conn.execute("SELECT count(*) FROM truck_schedules").fetchone()[0], 1,
@@ -320,12 +583,16 @@ class RoadDeliveryTests(unittest.TestCase):
             at.run()
             self.assertEqual(len(at.dataframe[0].value), 1, [e.value for e in at.error])
             schedule_id = int(at.dataframe[0].value.iloc[0]["id"])
+            self.assertEqual(at.dataframe[0].value.iloc[0]["assigned_orders"], 1)
+            self.assertEqual(self.conn.execute("SELECT count(*) FROM truck_item_deliveries").fetchone()[0], 2)
 
             # A duplicate booking must show the database validation error and
             # leave the saved schedule unchanged.
             at.session_state["road_delivery_test_action"] = "create"
             at.run()
-            fill_create_form()
+            at.selectbox(key="schedule_create_route").set_value(1).run()
+            self.assertEqual(len(at.multiselect(key="schedule_create_orders_1").options), 1)
+            fill_create_form(order_ids[1])
             next(b for b in at.button if b.label == "Create Schedule").click().run()
             self.assertFalse(at.exception, [e.message for e in at.exception])
             self.assertTrue(any("overlapping" in e.value for e in at.error))
@@ -344,28 +611,12 @@ class RoadDeliveryTests(unittest.TestCase):
 
             # A linked item must prevent UI deletion rather than be removed by
             # the existing schema's cascading schedule foreign key.
-            customer_id = self.conn.execute("""INSERT INTO customers
-                (customer_name, address, contact_phone) VALUES ('Test customer', 'Test address', '0771234567')
-                RETURNING id""").fetchone()[0]
-            product_id = self.conn.execute("""INSERT INTO products
-                (product_name, unit_price, space_consumption_unit) VALUES ('Test product', 10, 1)
-                RETURNING id""").fetchone()[0]
-            order_id = self.conn.execute("""INSERT INTO orders
-                (customer_id, route_id, delivery_address, contact_phone, order_date, delivery_date)
-                VALUES (%s, 1, 'Test address', '0771234567', '2026-09-20', '2026-10-05') RETURNING id""",
-                (customer_id,)).fetchone()[0]
-            item_id = self.conn.execute("""INSERT INTO order_items
-                (order_id, product_id, unit_price, quantity) VALUES (%s, %s, 10, 1) RETURNING id""",
-                (order_id, product_id)).fetchone()[0]
-            self.conn.execute("INSERT INTO truck_item_deliveries (truck_schedule_id, order_item_id) VALUES (%s, %s)",
-                              (schedule_id, item_id))
-            self.conn.commit()
             at.session_state["road_delivery_test_action"] = "delete"
             at.run()
             next(b for b in at.button if b.label == "Confirm Delete").click().run()
             self.assertFalse(at.exception, [e.message for e in at.exception])
             self.assertTrue(any("assigned delivery items" in e.value for e in at.error))
-            self.assertEqual(self.conn.execute("SELECT count(*) FROM truck_item_deliveries").fetchone()[0], 1)
+            self.assertEqual(self.conn.execute("SELECT count(*) FROM truck_item_deliveries").fetchone()[0], 2)
             self.conn.execute("DELETE FROM truck_item_deliveries WHERE truck_schedule_id = %s", (schedule_id,))
             self.conn.commit()
             next(b for b in at.button if b.label == "Confirm Delete").click().run()
@@ -380,6 +631,7 @@ class RoadDeliveryTests(unittest.TestCase):
                 os.environ["DATABASE_URL"] = old_url
             with psycopg.connect(self.test_url) as cleanup:
                 cleanup.execute("DELETE FROM truck_schedules")
+                cleanup.execute("DELETE FROM orders WHERE id = ANY(%s)", (order_ids,))
 
 
 if __name__ == "__main__":

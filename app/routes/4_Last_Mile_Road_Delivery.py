@@ -11,6 +11,43 @@ LOCAL_TIME = ZoneInfo("Asia/Colombo")
 NOTICE_KEY = "road_delivery_notice"
 
 
+def manager_id():
+    user = st.session_state.get("user")
+    return user.id if getattr(user, "role", None) == "store_manager" else None
+
+
+def fetch_received_orders(route_id):
+    return fetch_all(
+        """SELECT o.id, c.customer_name, o.delivery_address,
+                  o.order_date AT TIME ZONE 'Asia/Colombo' AS order_placed,
+                  count(i.id) AS item_count, sum(i.quantity) AS total_quantity
+           FROM orders o JOIN customers c ON c.id = o.customer_id
+           JOIN order_items i ON i.order_id = o.id
+           JOIN routes r ON r.id = o.route_id
+           JOIN routes chosen ON chosen.id = %s
+           JOIN stores store ON store.id = r.store_id
+           WHERE (r.store_id, r.route_name, r.service_area, r.max_delivery_time_hrs) =
+                 (chosen.store_id, chosen.route_name, chosen.service_area, chosen.max_delivery_time_hrs)
+             AND (%s::uuid IS NULL OR store.manager_id = %s)
+           GROUP BY o.id, c.customer_name
+           HAVING bool_and(i.item_lifecycle_status = 'STORE_RECEIVED')
+              AND NOT EXISTS (SELECT 1 FROM truck_item_deliveries d
+                              JOIN order_items assigned ON assigned.id = d.order_item_id
+                              WHERE assigned.order_id = o.id)
+           ORDER BY o.order_date, o.id""",
+        (route_id, manager_id(), manager_id()),
+    )
+
+
+def fetch_managed_schedule(schedule_id):
+    return fetch_one(
+        """SELECT schedule.* FROM truck_schedules schedule
+           JOIN routes r ON r.id = schedule.route_id JOIN stores store ON store.id = r.store_id
+           WHERE schedule.id = %s AND (%s::uuid IS NULL OR store.manager_id = %s)""",
+        (schedule_id, manager_id(), manager_id()),
+    )
+
+
 def show_database_error(error):
     if getattr(error, "sqlstate", None) in ("40001", "40P01"):
         st.error("Another roster change happened at the same time. Please try again.")
@@ -30,37 +67,58 @@ def fetch_schedules(limit, offset):
                s.start_timestamp AT TIME ZONE 'Asia/Colombo' AS start_local,
                s.end_timestamp AT TIME ZONE 'Asia/Colombo' AS end_local,
                s.duration_hours, r.max_delivery_time_hrs AS route_max_hours,
-               (SELECT count(*) FROM truck_item_deliveries i
-                WHERE i.truck_schedule_id = s.id) AS assigned_items
+               (SELECT count(DISTINCT i.order_id) FROM truck_item_deliveries d
+                JOIN order_items i ON i.id = d.order_item_id
+                WHERE d.truck_schedule_id = s.id) AS assigned_orders
         FROM truck_schedules s
         JOIN trucks t ON t.id = s.truck_id
         JOIN routes r ON r.id = s.route_id
         JOIN employees d ON d.id = s.driver_id
         LEFT JOIN employees a ON a.id = s.assistant_id
+        JOIN stores store ON store.id = r.store_id
+        WHERE (%s::uuid IS NULL OR store.manager_id = %s)
         ORDER BY s.start_timestamp DESC, s.id DESC
         LIMIT %s OFFSET %s
         """,
-        (limit, offset),
+        (manager_id(), manager_id(), limit, offset),
     )
 
 
-def schedule_form(schedule=None):
-    routes = fetch_all("SELECT id, route_name, max_delivery_time_hrs FROM routes ORDER BY route_name, id")
-    trucks = fetch_all("SELECT id, license_plate, vehicle_status FROM trucks ORDER BY license_plate, id")
-    crew = fetch_all("SELECT id, employee_name, employee_role FROM employees ORDER BY employee_name, id")
-    drivers = [e for e in crew if e.employee_role == "DRIVER"]
-    assistants = [e for e in crew if e.employee_role == "ASSISTANT"]
-    if not all((routes, trucks, drivers, assistants)):
-        st.info("Add a route, truck, driver, and assistant before scheduling a delivery.")
-        return None
+def unique_records(records, fields, current_id=None):
+    """Collapse matching records while keeping an edited schedule's assigned ID."""
+    unique = {}
+    for record in records:
+        identity = tuple(getattr(record, field) for field in fields)
+        if identity not in unique or record.id == current_id:
+            unique[identity] = record
+    return list(unique.values())
 
-    route_labels = {r.id: f"{r.route_name} (maximum {r.max_delivery_time_hrs} hours)" for r in routes}
-    truck_labels = {t.id: f"{t.license_plate} ({t.vehicle_status})" for t in trucks}
-    driver_labels = {e.id: e.employee_name for e in drivers}
-    assistant_labels = {e.id: e.employee_name for e in assistants}
-    now = datetime.now(LOCAL_TIME).replace(second=0, microsecond=0)
-    start = schedule.start_timestamp.astimezone(LOCAL_TIME) if schedule else now
-    end = schedule.end_timestamp.astimezone(LOCAL_TIME) if schedule else now + timedelta(hours=1)
+
+def distinguish_labels(records, labels):
+    """Keep different records with the same display text identifiable."""
+    counts = {}
+    for label in labels.values():
+        counts[label] = counts.get(label, 0) + 1
+    return {
+        record.id: (f"{labels[record.id]} ({record.store_name}, #{record.id})"
+                    if counts[labels[record.id]] > 1 else labels[record.id])
+        for record in records
+    }
+
+
+def schedule_form(schedule=None):
+    routes = fetch_all("""SELECT r.id, r.store_id, r.route_name, r.service_area,
+                                r.max_delivery_time_hrs, s.store_name
+                         FROM routes r JOIN stores s ON s.id = r.store_id
+                         WHERE (%s::uuid IS NULL OR s.manager_id = %s)
+                         ORDER BY r.route_name, r.id""", (manager_id(), manager_id()))
+    routes = unique_records(
+        routes, ("store_id", "route_name", "service_area", "max_delivery_time_hrs"),
+        schedule.route_id if schedule else None,
+    )
+    if not routes:
+        st.info("No delivery routes are available for your store. Add a route before scheduling a delivery.")
+        return None
     prefix = f"schedule_edit_{schedule.id}" if schedule else "schedule_create"
 
     def selection(label, labels, current_id, key):
@@ -68,37 +126,69 @@ def schedule_form(schedule=None):
         return st.selectbox(label, options, index=options.index(current_id) if current_id in options else 0,
                             format_func=labels.get, key=key)
 
+    route_labels = distinguish_labels(
+        routes, {r.id: f"{r.route_name} (maximum {r.max_delivery_time_hrs} hours)" for r in routes},
+    )
+    # Outside the form: changing route immediately reloads orders and store resources.
+    route_id = selection("Route", route_labels, schedule.route_id if schedule else None, f"{prefix}_route")
+    store = next(r for r in routes if r.id == route_id)
+    st.caption(f"Delivery store: {store.store_name}")
+    trucks = fetch_all("""SELECT id, license_plate, vehicle_status FROM trucks
+                          WHERE store_id = %s ORDER BY license_plate, id""", (store.store_id,))
+    crew = fetch_all("""SELECT e.id, e.store_id, e.employee_name, e.employee_role,
+                              e.contact_phone, e.employee_status, s.store_name
+                       FROM employees e JOIN stores s ON s.id = e.store_id
+                       WHERE e.store_id = %s ORDER BY e.employee_name, e.id""", (store.store_id,))
+    crew_fields = ("store_id", "employee_name", "employee_role", "contact_phone", "employee_status")
+    drivers = unique_records(
+        [e for e in crew if e.employee_role == "DRIVER"], crew_fields,
+        schedule.driver_id if schedule else None,
+    )
+    assistants = unique_records(
+        [e for e in crew if e.employee_role == "ASSISTANT"], crew_fields,
+        schedule.assistant_id if schedule else None,
+    )
+    if not all((routes, trucks, drivers, assistants)):
+        st.info("Add a route, truck, driver, and assistant before scheduling a delivery.")
+        return None
+
+    truck_labels = {t.id: f"{t.license_plate} ({t.vehicle_status})" for t in trucks}
+    driver_labels = distinguish_labels(drivers, {e.id: e.employee_name for e in drivers})
+    assistant_labels = distinguish_labels(assistants, {e.id: e.employee_name for e in assistants})
+    now = datetime.now(LOCAL_TIME).replace(second=0, microsecond=0)
+    start = schedule.start_timestamp.astimezone(LOCAL_TIME) if schedule else now
+    end = schedule.end_timestamp.astimezone(LOCAL_TIME) if schedule else now + timedelta(hours=1)
+    order_ids = []
     if schedule is None:
-        # Keep the route outside the form so changing it refreshes item choices.
-        route_id = selection("Route", route_labels, None, f"{prefix}_route")
-        items = fetch_all(
-            """SELECT i.id, i.order_id, p.product_name, i.quantity
-               FROM order_items i
-               JOIN orders o ON o.id = i.order_id
-               JOIN products p ON p.id = i.product_id
-               WHERE o.route_id = %s AND i.item_lifecycle_status = 'STORE_RECEIVED'
-                 AND NOT EXISTS (SELECT 1 FROM truck_item_deliveries d
-                                 WHERE d.order_item_id = i.id)
-               ORDER BY i.order_id, i.id""",
-            (route_id,),
-        )
-        item_labels = {
-            i.id: f"Order #{i.order_id} / Item #{i.id}: {i.product_name} (Qty: {i.quantity})"
-            for i in items
+        orders = fetch_received_orders(route_id)
+        order_labels = {
+            o.id: f"Order #{o.id}: {o.customer_name} | {o.delivery_address} | "
+                  f"{o.item_count} items, {o.total_quantity} units | Placed {o.order_placed:%Y-%m-%d}"
+            for o in orders
         }
+    else:
+        assigned = fetch_data(
+            """SELECT DISTINCT o.id AS order_id, c.customer_name, o.delivery_address,
+                              o.order_date AT TIME ZONE 'Asia/Colombo' AS order_placed
+               FROM truck_item_deliveries d JOIN order_items i ON i.id = d.order_item_id
+               JOIN orders o ON o.id = i.order_id JOIN customers c ON c.id = o.customer_id
+               WHERE d.truck_schedule_id = %s ORDER BY o.id""", (schedule.id,),
+        )
+        if not assigned.empty:
+            st.write("Assigned orders")
+            st.dataframe(assigned, hide_index=True, width="stretch")
 
     with st.form(f"{prefix}_form"):
-        if schedule is not None:
-            route_id = selection("Route", route_labels, schedule.route_id, f"{prefix}_route")
-        else:
-            st.multiselect(
-                "Order Items", list(item_labels), format_func=item_labels.get,
-                key=f"{prefix}_order_items_{route_id}", disabled=not items,
-                placeholder="Select order items" if items else "No eligible order items",
+        if schedule is None:
+            order_ids = st.multiselect(
+                "Received Orders", list(order_labels), format_func=order_labels.get,
+                key=f"{prefix}_orders_{route_id}", disabled=not orders,
+                placeholder="Select received orders" if orders else "No received orders ready for delivery",
             )
-            if not items:
-                st.info("No unassigned, store-received order items are available for this route.")
-            st.caption("Order item selections are for preview only and will not be saved yet.")
+            if not orders:
+                st.info("No complete, unassigned orders have been received for this route.")
+            st.caption("An order is ready when all its items are received at this store. "
+                       "All items in each selected order will be assigned to this delivery.")
         truck_id = selection("Truck", truck_labels, schedule.truck_id if schedule else None, f"{prefix}_truck")
         col1, col2 = st.columns(2)
         with col1:
@@ -117,7 +207,8 @@ def schedule_form(schedule=None):
             end_date = st.date_input("End Date", end.date(), key=f"{prefix}_end_date")
             end_time = st.time_input("End Time", end.time().replace(tzinfo=None), step=60,
                                      key=f"{prefix}_end_time")
-        submitted = st.form_submit_button("Save Changes" if schedule else "Create Schedule", type="primary")
+        submitted = st.form_submit_button("Save Changes" if schedule else "Create Schedule", type="primary",
+                                          disabled=schedule is None and not orders)
     if not submitted:
         return None
     start_at = datetime.combine(start_date, start_time, tzinfo=LOCAL_TIME)
@@ -125,27 +216,35 @@ def schedule_form(schedule=None):
     if end_at <= start_at:
         st.error("Delivery end must be after delivery start.")
         return None
-    return truck_id, route_id, driver_id, assistant_id, start_at, end_at
+    if schedule is None and not order_ids:
+        st.error("Select at least one received order for this delivery.")
+        return None
+    return (truck_id, route_id, driver_id, assistant_id, start_at, end_at), order_ids
 
 
 def save_schedule(values, schedule_id=None):
+    schedule_values, order_ids = values
     actor_id = getattr(st.session_state.get("user"), "id", None)
     try:
         with get_connection() as conn:
             if schedule_id is None:
                 row = conn.execute(
-                    """INSERT INTO truck_schedules
-                       (truck_id, route_id, driver_id, assistant_id,
-                        start_timestamp, end_timestamp, created_by, updated_by)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                    (*values, actor_id, actor_id),
+                    "SELECT create_received_order_delivery(%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (*schedule_values, order_ids, actor_id),
                 ).fetchone()
             else:
                 row = conn.execute(
                     """UPDATE truck_schedules SET truck_id = %s, route_id = %s,
                        driver_id = %s, assistant_id = %s, start_timestamp = %s,
-                       end_timestamp = %s, updated_by = %s WHERE id = %s RETURNING id""",
-                    (*values, actor_id, schedule_id),
+                       end_timestamp = %s, updated_by = %s WHERE id = %s
+                       AND (%s::uuid IS NULL OR EXISTS (
+                           SELECT 1 FROM routes r JOIN stores store ON store.id = r.store_id
+                           WHERE r.id = truck_schedules.route_id AND store.manager_id = %s))
+                       AND (%s::uuid IS NULL OR EXISTS (
+                           SELECT 1 FROM routes r JOIN stores store ON store.id = r.store_id
+                           WHERE r.id = %s AND store.manager_id = %s)) RETURNING id""",
+                    (*schedule_values, actor_id, schedule_id, manager_id(), manager_id(),
+                     manager_id(), schedule_values[1], manager_id()),
                 ).fetchone()
         if row is None:
             st.error("This schedule was removed. Refresh the list and try again.")
@@ -166,7 +265,7 @@ def create_schedule_dialog():
 
 @st.dialog("Edit Delivery Schedule", width="large")
 def edit_schedule_dialog(schedule_id):
-    schedule = fetch_one("SELECT * FROM truck_schedules WHERE id = %s", (schedule_id,))
+    schedule = fetch_managed_schedule(schedule_id)
     if schedule is None:
         st.error("This schedule was removed. Refresh the list.")
         return
@@ -177,6 +276,9 @@ def edit_schedule_dialog(schedule_id):
 
 @st.dialog("Delete Delivery Schedule")
 def delete_schedule_dialog(schedule_id):
+    if fetch_managed_schedule(schedule_id) is None:
+        st.error("This schedule is unavailable for your store.")
+        return
     st.warning(f"Delete schedule #{schedule_id}?")
     st.caption("Schedules with assigned delivery items are kept to preserve delivery history.")
     if st.button("Confirm Delete", type="primary"):
@@ -190,7 +292,10 @@ def delete_schedule_dialog(schedule_id):
                     """DELETE FROM truck_schedules s WHERE s.id = %s
                        AND NOT EXISTS (SELECT 1 FROM truck_item_deliveries i
                                        WHERE i.truck_schedule_id = s.id)
-                       RETURNING s.id""", (schedule_id,),
+                       AND (%s::uuid IS NULL OR EXISTS (
+                           SELECT 1 FROM routes r JOIN stores store ON store.id = r.store_id
+                           WHERE r.id = s.route_id AND store.manager_id = %s))
+                       RETURNING s.id""", (schedule_id, manager_id(), manager_id()),
                 ).fetchone()
             if row is None:
                 st.error("This schedule has assigned delivery items or was already removed.")
@@ -204,7 +309,7 @@ def delete_schedule_dialog(schedule_id):
 
 st.set_page_config(page_title="Last-Mile Road Delivery", layout="wide")
 st.title("4. Last-Mile Road Delivery & Rostering")
-st.caption("Create, view, edit, and delete delivery schedules. All times shown are Sri Lanka time.")
+st.caption("Select received orders and assign a truck and crew for delivery. All times shown are Sri Lanka time.")
 notice = st.session_state.pop(NOTICE_KEY, None)
 if notice:
     st.success(notice)
@@ -217,7 +322,10 @@ with st.expander("Scheduling rules"):
 
 try:
     toolbar = st.container()
-    total = fetch_one("SELECT count(*) FROM truck_schedules")[0]
+    total = fetch_one("""SELECT count(*) FROM truck_schedules s JOIN routes r ON r.id = s.route_id
+                         JOIN stores store ON store.id = r.store_id
+                         WHERE (%s::uuid IS NULL OR store.manager_id = %s)""",
+                      (manager_id(), manager_id()))[0]
     selected = render_datatable(fetch_schedules, total, key="road_delivery_schedules")
     with toolbar:
         create_col, edit_col, delete_col, _ = st.columns([1, 1, 1, 5])

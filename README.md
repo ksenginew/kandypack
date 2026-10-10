@@ -180,6 +180,20 @@ docker compose -f compose.yaml -f compose.prod.yaml up -d --build
 
 ## 🧰 Database Management & Useful Commands
 
+Last-mile delivery scheduling lets a store manager select complete received orders
+for a route and assign a truck, driver, and assistant from that store. An order is
+available only when all its items are `STORE_RECEIVED` and none is already assigned.
+Saving reserves every item in the selected orders together; item statuses remain
+`STORE_RECEIVED` until dispatch. Store managers see routes and schedules for stores
+whose `manager_id` matches their account.
+
+For an existing database, apply the updated scheduling functions without rebuilding
+the tables or reseeding:
+
+```bash
+docker compose exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d kandypack -f /docker-entrypoint-initdb.d/06-schedule_delivery.sql
+```
+
 | Task | Command |
 | :--- | :--- |
 | **Streamlit Logs** | `docker compose logs -f server` |

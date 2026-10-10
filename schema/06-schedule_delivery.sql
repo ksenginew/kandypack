@@ -65,6 +65,20 @@ BEGIN
 
     SELECT max_delivery_time_hrs INTO v_max_hours
     FROM routes WHERE id = v_schedule.route_id;
+    IF EXISTS (
+        SELECT 1 FROM truck_item_deliveries d
+        JOIN order_items i ON i.id = d.order_item_id
+        JOIN orders o ON o.id = i.order_id
+        JOIN routes r ON r.id = o.route_id
+        JOIN routes chosen ON chosen.id = v_schedule.route_id
+        WHERE d.truck_schedule_id = p_schedule_id
+          AND (r.store_id, r.route_name, r.service_area, r.max_delivery_time_hrs)
+              IS DISTINCT FROM
+              (chosen.store_id, chosen.route_name, chosen.service_area, chosen.max_delivery_time_hrs)
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '23514',
+            MESSAGE = 'The delivery route must match all assigned orders.';
+    END IF;
     IF EXTRACT(EPOCH FROM (v_schedule.end_timestamp - v_schedule.start_timestamp))
        / 3600.0 > v_max_hours THEN
         RAISE EXCEPTION USING ERRCODE = '23514',
@@ -209,6 +223,86 @@ BEGIN
         p_truck_id, p_route_id, p_driver_id, p_assistant_id,
         p_start_timestamp, p_end_timestamp, p_created_by, p_created_by
     );
+END;
+$$;
+
+-- Schedule complete received orders in one transaction. Duplicate route records
+-- with identical store, name, service area and time limit represent one route.
+CREATE OR REPLACE FUNCTION create_received_order_delivery(
+    p_truck_id BIGINT, p_route_id BIGINT, p_driver_id BIGINT,
+    p_assistant_id BIGINT, p_start_timestamp TIMESTAMPTZ,
+    p_end_timestamp TIMESTAMPTZ, p_order_ids BIGINT[], p_actor_id UUID DEFAULT NULL
+)
+RETURNS BIGINT LANGUAGE plpgsql AS $$
+DECLARE
+    v_route routes%ROWTYPE;
+    v_order_id BIGINT;
+    v_schedule_id BIGINT;
+    v_count BIGINT;
+    v_route_ids BIGINT[];
+BEGIN
+    IF COALESCE(cardinality(p_order_ids), 0) = 0 OR array_position(p_order_ids, NULL) IS NOT NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '23514',
+            MESSAGE = 'Select at least one received order for this delivery.';
+    END IF;
+    -- Use the roster's serialization order before locking orders or resources.
+    UPDATE road_delivery_validation_guard SET version = NOT version WHERE singleton;
+    SELECT * INTO v_route FROM routes WHERE id = p_route_id FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'The selected route no longer exists.';
+    END IF;
+    IF EXISTS (SELECT 1 FROM users WHERE id = p_actor_id AND role = 'store_manager')
+       AND NOT EXISTS (SELECT 1 FROM stores WHERE id = v_route.store_id AND manager_id = p_actor_id) THEN
+        RAISE EXCEPTION USING ERRCODE = '23514',
+            MESSAGE = 'Select a route belonging to your managed store.';
+    END IF;
+    PERFORM 1 FROM trucks WHERE id = p_truck_id AND store_id = v_route.store_id FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'Select a truck from the delivery store.';
+    END IF;
+    PERFORM 1 FROM employees WHERE id = p_driver_id AND store_id = v_route.store_id FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'Select a driver from the delivery store.';
+    END IF;
+    PERFORM 1 FROM employees WHERE id = p_assistant_id AND store_id = v_route.store_id FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'Select an assistant from the delivery store.';
+    END IF;
+    SELECT array_agg(id) INTO v_route_ids FROM (
+        SELECT id FROM routes
+        WHERE (store_id, route_name, service_area, max_delivery_time_hrs) =
+              (v_route.store_id, v_route.route_name, v_route.service_area, v_route.max_delivery_time_hrs)
+        ORDER BY id FOR SHARE
+    ) matching_routes;
+    -- Lock parent orders as well as every item to prevent the selection changing
+    -- while validating and assigning the complete order.
+    PERFORM 1 FROM orders WHERE id = ANY(p_order_ids) ORDER BY id FOR UPDATE;
+    SELECT count(*) INTO v_count FROM orders WHERE id = ANY(p_order_ids);
+    IF v_count <> (SELECT count(DISTINCT id) FROM unnest(p_order_ids) id) THEN
+        RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'A selected order no longer exists.';
+    END IF;
+    PERFORM 1 FROM order_items WHERE order_id = ANY(p_order_ids) ORDER BY id FOR UPDATE;
+    FOR v_order_id IN SELECT DISTINCT id FROM unnest(p_order_ids) id ORDER BY id LOOP
+        IF NOT EXISTS (SELECT 1 FROM orders WHERE id = v_order_id AND route_id = ANY(v_route_ids)) THEN
+            RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'Selected orders must belong to this delivery route.';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM order_items WHERE order_id = v_order_id)
+           OR EXISTS (SELECT 1 FROM order_items i WHERE i.order_id = v_order_id
+                      AND (i.item_lifecycle_status <> 'STORE_RECEIVED'
+                           OR EXISTS (SELECT 1 FROM truck_item_deliveries d WHERE d.order_item_id = i.id))) THEN
+            RAISE EXCEPTION USING ERRCODE = '23514',
+                MESSAGE = format('Order #%s is no longer available. All items must be received and unassigned.', v_order_id);
+        END IF;
+    END LOOP;
+    INSERT INTO truck_schedules
+        (truck_id, route_id, driver_id, assistant_id, start_timestamp, end_timestamp, created_by, updated_by)
+    VALUES (p_truck_id, p_route_id, p_driver_id, p_assistant_id, p_start_timestamp, p_end_timestamp, p_actor_id, p_actor_id)
+    RETURNING id INTO v_schedule_id;
+    INSERT INTO truck_item_deliveries (truck_schedule_id, order_item_id)
+        SELECT v_schedule_id, id FROM order_items WHERE order_id = ANY(p_order_ids);
+    -- The items remain STORE_RECEIVED while reserved for a future trip.
+    -- Dispatch and delivery confirmation own the later lifecycle transitions.
+    RETURN v_schedule_id;
 END;
 $$;
 
