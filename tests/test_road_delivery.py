@@ -93,13 +93,13 @@ class RoadDeliveryTests(unittest.TestCase):
         product = self.conn.execute("""INSERT INTO products (product_name, unit_price, space_consumption_unit)
             VALUES ('Delivery product', 10, 1) RETURNING id""").fetchone()[0]
         order = self.conn.execute("""INSERT INTO orders
-            (customer_id, route_id, delivery_address, contact_phone, delivery_date)
-            VALUES (%s, %s, 'Delivery address', '0771234567', '2026-10-05') RETURNING id""",
+            (customer_id, route_id, delivery_address, contact_phone, order_date, delivery_date)
+            VALUES (%s, %s, 'Delivery address', '0771234567', '2026-09-20', '2026-10-05') RETURNING id""",
             (customer, route)).fetchone()[0]
         for status in statuses:
             self.conn.execute("""INSERT INTO order_items
-                (order_id, product_id, unit_price, quantity, item_lifecycle_status)
-                VALUES (%s, %s, 10, 2, %s)""", (order, product, status))
+                (order_id, product_id, unit_price, item_lifecycle_status)
+                VALUES (%s, %s, 10, %s)""", (order, product, status))
         return order
 
     def order_delivery(self, orders, route=1, actor=None, conn=None):
@@ -223,7 +223,8 @@ class RoadDeliveryTests(unittest.TestCase):
         try:
             script = (
                 "import runpy\n"
-                f"page = runpy.run_path({str(ROOT / 'app/routes/4_Last_Mile_Road_Delivery.py')!r})\n"
+                f"page = runpy.run_path({str(ROOT / 'app/interfaces/truck_schedules.py')!r})\n"
+                "page['render_truck_schedules_interface']()\n"
                 "page['schedule_form']()\n"
             )
             at = AppTest.from_string(script, default_timeout=10)
@@ -471,7 +472,8 @@ class RoadDeliveryTests(unittest.TestCase):
             self.conn.commit()
             script = (
                 "import runpy\nimport streamlit as st\n"
-                f"page = runpy.run_path({str(ROOT / 'app/routes/4_Last_Mile_Road_Delivery.py')!r})\n"
+                f"page = runpy.run_path({str(ROOT / 'app/interfaces/truck_schedules.py')!r})\n"
+                "page['render_truck_schedules_interface']()\n"
                 "schedule_id = st.session_state.get('options_test_schedule_id')\n"
                 "if schedule_id is None: page['schedule_form']()\n"
                 "else: page['edit_schedule_dialog'].__wrapped__(schedule_id)\n"
@@ -537,7 +539,8 @@ class RoadDeliveryTests(unittest.TestCase):
             # Render the real dialog bodies inline to test their forms and CRUD.
             script = (
                 "import runpy\nimport streamlit as st\n"
-                f"page = runpy.run_path({str(ROOT / 'app/routes/4_Last_Mile_Road_Delivery.py')!r})\n"
+                f"page = runpy.run_path({str(ROOT / 'app/interfaces/truck_schedules.py')!r})\n"
+                "page['render_truck_schedules_interface']()\n"
                 "action = st.session_state.get('road_delivery_test_action')\n"
                 "if action == 'create': page['create_schedule_dialog'].__wrapped__()\n"
                 "elif action == 'edit': page['edit_schedule_dialog'].__wrapped__(st.session_state['road_delivery_test_id'])\n"
@@ -632,6 +635,27 @@ class RoadDeliveryTests(unittest.TestCase):
             with psycopg.connect(self.test_url) as cleanup:
                 cleanup.execute("DELETE FROM truck_schedules")
                 cleanup.execute("DELETE FROM orders WHERE id = ANY(%s)", (order_ids,))
+
+    def test_ui_dispatch_page_uses_received_order_interface(self):
+        from streamlit.testing.v1 import AppTest
+
+        sys.path.insert(0, str(ROOT / "app"))
+        old_url = os.environ.get("DATABASE_URL")
+        os.environ["DATABASE_URL"] = self.test_url
+        try:
+            at = AppTest.from_file(str(ROOT / "app/routes/04_Truck_Logistics.py"), default_timeout=10)
+            at.secrets["DATABASE_URL"] = self.test_url
+            at.run()
+            self.assertFalse(at.exception, [e.message for e in at.exception])
+            self.assertEqual([tab.label for tab in at.tabs], ["Truck Schedules", "Delivery Drop-offs"])
+            self.assertEqual(len(at.dataframe), 2)
+            self.assertTrue(any(button.key == "road_delivery_create" for button in at.button))
+            self.assertFalse(any(button.label == "Assign" for button in at.button))
+        finally:
+            if old_url is None:
+                os.environ.pop("DATABASE_URL", None)
+            else:
+                os.environ["DATABASE_URL"] = old_url
 
 
 if __name__ == "__main__":

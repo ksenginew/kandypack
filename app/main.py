@@ -1,10 +1,12 @@
 import streamlit as st
 from auth import register_user, login_user
 
-st.set_page_config(page_title="Auth Portal", page_icon="🔐", layout="centered")
+st.set_page_config(page_title="Rail and Road-based Supply Chain Distribution System", page_icon="🚆", layout="centered")
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+if "user" not in st.session_state:
+    st.session_state.user = None
 
 def logout():
     st.session_state.authenticated = False
@@ -12,24 +14,50 @@ def logout():
     st.rerun()
 
 if st.session_state.authenticated:
-    st.button("Sign Out", on_click=logout, type="primary")
-    pg = st.navigation([
-        st.Page("./routes/0_Dashboard.py"),
-        st.Page("./routes/11_Stores.py"),
-        st.Page("./routes/12_Routes.py"),
-        st.Page("./routes/13_Trucks.py"),
-        st.Page("./routes/14_Employees.py"),
-        st.Page("./routes/1_Master_Data_and_Fleet.py"),
-        st.Page("./routes/2_Customer_Order_Processing.py"),
-        st.Page("./routes/3_Railway_Bulk_Transport.py"),
-        st.Page("./routes/4_Last_Mile_Road_Delivery.py"),
-        st.Page("./routes/5_Delivery_Status_Tracking.py"),
-        st.Page("./routes/6_Reporting_and_Analytics.py")
-    ])
+    # Sidebar user profile badge and logout
+    user_info = st.session_state.user
+    user_role = user_info.role
+
+    with st.sidebar:
+        st.write(f"Logged in as **{user_info.name}**")
+        st.caption(f"Role: `{user_role.upper()}`")
+        st.button("Sign Out", on_click=logout, use_container_width=True)
+        st.divider()
+
+    # Domain-organized Navigation Hierarchy
+    nav_sections = {
+        "Overview": [
+            st.Page("routes/00_Dashboard.py", title="Dashboard", icon="📊", default=True),
+        ],
+        "Sales & Commerce": [
+            st.Page("routes/01_Sales_Orders.py", title="Orders & Items", icon="🛒"),
+            st.Page("routes/02_Sales_Catalog.py", title="Customers & Products", icon="👥"),
+        ],
+        "Logistics & Dispatch": [
+            st.Page("routes/03_Train_Logistics.py", title="Rail Bulk Manifest", icon="🚆"),
+            st.Page("routes/04_Truck_Logistics.py", title="Last-Mile Dispatch", icon="📦"),
+        ],
+        "Fleet & Operations": [
+            st.Page("routes/05_Fleet_Routes.py", title="Fleet & Routes", icon="🚛"),
+            st.Page("routes/06_Staff.py", title="Staff & Drivers", icon="👷"),
+        ],
+    }
+
+    # Add Admin section conditionally based on RBAC
+    if user_role == "admin":
+        nav_sections["Administration"] = [
+            st.Page("routes/07_Admin_Stores.py", title="Store Hubs", icon="🏬"),
+            st.Page("routes/08_Admin_Users.py", title="User Access Control", icon="🔑"),
+            st.Page("routes/09_Reports.py", title="Reports & Analytics", icon="📈"),
+            st.Page("routes/10_Assistant.py", title="Assistant Dashboard", icon="🤖"),
+        ]
+
+    # Non-admin users with specific roles can also be filtered if needed
+    pg = st.navigation(nav_sections)
     pg.run()
 
 else:
-    st.title("Welcome")
+    st.title("Rail and Road-based Supply Chain Distribution System")
     tab_signin, tab_signup = st.tabs(["Sign In", "Sign Up"])
 
     with tab_signin:

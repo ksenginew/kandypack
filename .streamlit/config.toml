@@ -1,0 +1,15 @@
+[theme]
+base = "light"
+
+primaryColor = "#3F51B5"
+
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F5FA"
+
+textColor = "#1C1B1F"
+
+font = "sans serif"
+
+baseRadius = "0.75rem"
+
+showBorder = false

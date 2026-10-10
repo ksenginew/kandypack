@@ -161,7 +161,7 @@ CREATE TABLE orders (
     id                     BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     customer_id            BIGINT NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
     route_id               BIGINT NOT NULL REFERENCES routes(id) ON DELETE RESTRICT,
-    delivery_address       TEXT NOT NULL,
+    delivery_address       TEXT NOT NULL CHECK (trim(delivery_address) <> ''),
     contact_phone          VARCHAR(50) NOT NULL CHECK (contact_phone ~ '^[0-9\+\-\s\(\)\.]{7,20}$'),
     order_date             TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     delivery_date          TIMESTAMPTZ NOT NULL,
@@ -169,7 +169,9 @@ CREATE TABLE orders (
     created_by             UUID REFERENCES users(id) ON DELETE SET NULL,
     updated_by             UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at             TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT chk_place_orders_7_days_advance CHECK (delivery_date >= order_date + INTERVAL '7 days')
 );
 
 CREATE TABLE order_items (
@@ -177,8 +179,6 @@ CREATE TABLE order_items (
     order_id              BIGINT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     product_id            BIGINT NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
     unit_price            NUMERIC(12, 2) NOT NULL CHECK (unit_price >= 0),
-    quantity              INTEGER NOT NULL CHECK (quantity > 0),
-    total_price           NUMERIC(14, 2) GENERATED ALWAYS AS (quantity * unit_price) STORED,
     item_lifecycle_status enum_item_lifecycle_status NOT NULL DEFAULT 'PLACED',
     created_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP

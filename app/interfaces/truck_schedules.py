@@ -20,7 +20,7 @@ def fetch_received_orders(route_id):
     return fetch_all(
         """SELECT o.id, c.customer_name, o.delivery_address,
                   o.order_date AT TIME ZONE 'Asia/Colombo' AS order_placed,
-                  count(i.id) AS item_count, sum(i.quantity) AS total_quantity
+                  count(i.id) AS item_count, sum(COALESCE((to_jsonb(i)->>'quantity')::bigint, 1)) AS total_quantity
            FROM orders o JOIN customers c ON c.id = o.customer_id
            JOIN order_items i ON i.order_id = o.id
            JOIN routes r ON r.id = o.route_id
@@ -307,36 +307,35 @@ def delete_schedule_dialog(schedule_id):
         st.rerun()
 
 
-st.set_page_config(page_title="Last-Mile Road Delivery", layout="wide")
-st.title("4. Last-Mile Road Delivery & Rostering")
-st.caption("Select received orders and assign a truck and crew for delivery. All times shown are Sri Lanka time.")
-notice = st.session_state.pop(NOTICE_KEY, None)
-if notice:
-    st.success(notice)
-with st.expander("Scheduling rules"):
-    st.write("Each trip needs one driver and one assistant and must fit within its route's maximum delivery time.")
-    st.write("A truck or crew member cannot have overlapping deliveries. Drivers need a gap between trips; "
-             "assistants may work at most two trips with no gap.")
-    st.write("Working weeks begin on Monday: drivers may work up to 40 hours and assistants up to 60 hours. "
-             "Trips crossing a week boundary count toward each week separately.")
+def render_truck_schedules_interface():
+    st.caption("Select received orders and assign a truck and crew for delivery. All times shown are Sri Lanka time.")
+    notice = st.session_state.pop(NOTICE_KEY, None)
+    if notice:
+        st.success(notice)
+    with st.expander("Scheduling rules"):
+        st.write("Each trip needs one driver and one assistant and must fit within its route's maximum delivery time.")
+        st.write("A truck or crew member cannot have overlapping deliveries. Drivers need a gap between trips; "
+                 "assistants may work at most two trips with no gap.")
+        st.write("Working weeks begin on Monday: drivers may work up to 40 hours and assistants up to 60 hours. "
+                 "Trips crossing a week boundary count toward each week separately.")
 
-try:
-    toolbar = st.container()
-    total = fetch_one("""SELECT count(*) FROM truck_schedules s JOIN routes r ON r.id = s.route_id
-                         JOIN stores store ON store.id = r.store_id
-                         WHERE (%s::uuid IS NULL OR store.manager_id = %s)""",
-                      (manager_id(), manager_id()))[0]
-    selected = render_datatable(fetch_schedules, total, key="road_delivery_schedules")
-    with toolbar:
-        create_col, edit_col, delete_col, _ = st.columns([1, 1, 1, 5])
-        with create_col:
-            if st.button("Create", key="road_delivery_create", width="stretch"):
-                create_schedule_dialog()
-        with edit_col:
-            if st.button("Edit", key="road_delivery_edit", width="stretch", disabled=selected is None):
-                edit_schedule_dialog(int(selected[0]["id"]))
-        with delete_col:
-            if st.button("Delete", key="road_delivery_delete", width="stretch", disabled=selected is None):
-                delete_schedule_dialog(int(selected[0]["id"]))
-except Error as error:
-    show_database_error(error)
+    try:
+        toolbar = st.container()
+        total = fetch_one("""SELECT count(*) FROM truck_schedules s JOIN routes r ON r.id = s.route_id
+                             JOIN stores store ON store.id = r.store_id
+                             WHERE (%s::uuid IS NULL OR store.manager_id = %s)""",
+                          (manager_id(), manager_id()))[0]
+        selected = render_datatable(fetch_schedules, total, key="road_delivery_schedules")
+        with toolbar:
+            create_col, edit_col, delete_col, _ = st.columns([1, 1, 1, 5])
+            with create_col:
+                if st.button("Create", key="road_delivery_create", width="stretch"):
+                    create_schedule_dialog()
+            with edit_col:
+                if st.button("Edit", key="road_delivery_edit", width="stretch", disabled=selected is None):
+                    edit_schedule_dialog(int(selected[0]["id"]))
+            with delete_col:
+                if st.button("Delete", key="road_delivery_delete", width="stretch", disabled=selected is None):
+                    delete_schedule_dialog(int(selected[0]["id"]))
+    except Error as error:
+        show_database_error(error)

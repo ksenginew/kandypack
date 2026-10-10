@@ -20,7 +20,7 @@ def load_data(query: str, params: tuple = None) -> pd.DataFrame:
     return pd.DataFrame([row._asdict() for row in rows])
 
 # ---------------- Header & Year Filter ----------------
-st.title("🚚 Kandypack Operations & Sales Overview")
+st.title("🚆 Kandypack Operations & Sales Overview")
 st.caption("Live monitoring of overall pipeline, revenue, fleet status, and delivery lifecycles.")
 
 current_year = datetime.date.today().year
