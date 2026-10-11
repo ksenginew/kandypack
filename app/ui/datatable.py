@@ -10,7 +10,7 @@ def render_datatable(
     key: str = "datatable",
     *args,
     **kwargs,
-) -> pd.DataFrame:
+) -> list[dict]:
     """Renders a paginated table using a data function that accepts (limit, offset).
 
     Args:

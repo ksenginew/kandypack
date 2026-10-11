@@ -1,17 +1,23 @@
 import streamlit as st
 from auth import register_user, login_user
 
-st.set_page_config(page_title="Rail and Road-based Supply Chain Distribution System", page_icon="🚆", layout="centered")
+st.set_page_config(
+    page_title="Rail and Road-based Supply Chain Distribution System",
+    page_icon="🚆",
+    layout="centered",
+)
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "user" not in st.session_state:
     st.session_state.user = None
 
+
 def logout():
     st.session_state.authenticated = False
     st.session_state.user = None
     st.rerun()
+
 
 if st.session_state.authenticated:
     # Sidebar user profile badge and logout
@@ -27,23 +33,39 @@ if st.session_state.authenticated:
     # Domain-organized Navigation Hierarchy
     nav_sections = {
         "Overview": [
-            st.Page("routes/00_Dashboard.py", title="Dashboard", icon="📊", default=True),
-        ],
-        "Sales & Commerce": [
-            st.Page("routes/01_Sales_Orders.py", title="Orders & Items", icon="🛒"),
-            st.Page("routes/02_Sales_Catalog.py", title="Customers & Products", icon="👥"),
-        ],
-        "Logistics & Dispatch": [
-            st.Page("routes/03_Train_Logistics.py", title="Rail Bulk Manifest", icon="🚆"),
-            st.Page("routes/04_Truck_Logistics.py", title="Last-Mile Dispatch", icon="📦"),
-        ],
-        "Fleet & Operations": [
-            st.Page("routes/05_Fleet_Routes.py", title="Fleet & Routes", icon="🚛"),
-            st.Page("routes/06_Staff.py", title="Staff & Drivers", icon="👷"),
+            st.Page(
+                "routes/00_Dashboard.py", title="Dashboard", icon="📊", default=True
+            ),
         ],
     }
-
-    # Add Admin section conditionally based on RBAC
+    if user_role in ["sales", "admin"]:
+        nav_sections["Sales & Commerce"] = [
+            st.Page("routes/01_Sales_Orders.py", title="Orders & Items", icon="🛒"),
+            st.Page(
+                "routes/02_Sales_Catalog.py", title="Customers & Products", icon="👥"
+            ),
+        ]
+    if user_role in ["logistics", "admin"]:
+        if "Logistics & Dispatch" not in nav_sections:
+            nav_sections["Logistics & Dispatch"] = []
+        nav_sections["Logistics & Dispatch"].append(
+            st.Page(
+                "routes/03_Train_Logistics.py", title="Rail Bulk Manifest", icon="🚆"
+            ),
+        )
+    if user_role in ["store_manager", "admin"]:
+        if "Logistics & Dispatch" not in nav_sections:
+            nav_sections["Logistics & Dispatch"] = []
+        nav_sections["Logistics & Dispatch"].append(
+            st.Page(
+                "routes/04_Truck_Logistics.py", title="Last-Mile Dispatch", icon="📦"
+            ),
+        )
+    if user_role in ["store_manager", "admin"]:
+        nav_sections["Fleet & Operations"] = [
+            st.Page("routes/05_Fleet_Routes.py", title="Fleet & Routes", icon="🚛"),
+            st.Page("routes/06_Staff.py", title="Staff & Drivers", icon="👷"),
+        ]
     if user_role == "admin":
         nav_sections["Administration"] = [
             st.Page("routes/07_Admin_Stores.py", title="Store Hubs", icon="🏬"),
@@ -82,10 +104,14 @@ else:
             new_email = st.text_input("Email", placeholder="name@example.com")
             new_pass = st.text_input("Password", type="password")
             confirm_pass = st.text_input("Confirm Password", type="password")
-            submit_signup = st.form_submit_button("Create Account", use_container_width=True)
+            submit_signup = st.form_submit_button(
+                "Create Account", use_container_width=True
+            )
 
             if submit_signup:
-                user, message = register_user(new_name, new_email, new_pass, confirm_pass)
+                user, message = register_user(
+                    new_name, new_email, new_pass, confirm_pass
+                )
                 if user:
                     st.session_state.authenticated = True
                     st.session_state.user = user

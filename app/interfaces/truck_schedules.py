@@ -309,6 +309,9 @@ def delete_schedule_dialog(schedule_id):
 
 def render_truck_schedules_interface():
     st.caption("Select received orders and assign a truck and crew for delivery. All times shown are Sri Lanka time.")
+    if st.session_state.get("user") is None or getattr(st.session_state.get("user"), "role", None) not in ("store_manager", "admin"):
+        st.error("You do not have permission to view truck schedules.")
+        return
     notice = st.session_state.pop(NOTICE_KEY, None)
     if notice:
         st.success(notice)

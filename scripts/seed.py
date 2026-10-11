@@ -2,7 +2,10 @@ from datetime import datetime, timedelta, timezone
 import json
 import random
 import uuid
+from argon2 import PasswordHasher
 
+ph = PasswordHasher()
+password_hash = ph.hash("password")
 
 random.seed(42)
 OUTPUT_FILE = "schema/01-seed.sql"
@@ -116,19 +119,19 @@ def main():
             (
                 uuid.UUID(int=1), "System Administrator", "admin@supplychain.internal",
                 BASE_TIME - timedelta(days=90), None, "admin",
-                "$2b$12$e80MvQkK6Q5Z6XhF6Q6iK.b7fK.30s8nQoUu3zJbQf0aT7GqI7rGe",
+                password_hash,
                 BASE_TIME - timedelta(days=90), BASE_TIME - timedelta(days=90)
             ),
             (
                 uuid.UUID(int=2), "Head of Logistics", "logistics.director@supplychain.internal",
                 BASE_TIME - timedelta(days=85), None, "logistics",
-                "$2b$12$e80MvQkK6Q5Z6XhF6Q6iK.b7fK.30s8nQoUu3zJbQf0aT7GqI7rGe",
+                password_hash,
                 BASE_TIME - timedelta(days=85), BASE_TIME - timedelta(days=85)
             ),
             (
                 uuid.UUID(int=3), "Commercial Sales Lead", "sales.lead@supplychain.internal",
                 BASE_TIME - timedelta(days=80), None, "sales",
-                "$2b$12$e80MvQkK6Q5Z6XhF6Q6iK.b7fK.30s8nQoUu3zJbQf0aT7GqI7rGe",
+                password_hash,
                 BASE_TIME - timedelta(days=80), BASE_TIME - timedelta(days=80)
             )
         ]
@@ -141,7 +144,7 @@ def main():
             users.append((
                 uid, f"{first} {last} (Manager)", f"manager.{CITIES[i][2].lower()}@supplychain.internal",
                 BASE_TIME - timedelta(days=70 - i), None, "store_manager",
-                "$2b$12$e80MvQkK6Q5Z6XhF6Q6iK.b7fK.30s8nQoUu3zJbQf0aT7GqI7rGe",
+                password_hash,
                 BASE_TIME - timedelta(days=70 - i), BASE_TIME - timedelta(days=70 - i)
             ))
 
@@ -153,7 +156,7 @@ def main():
             users.append((
                 uid, f"{first} {last}", f"user.{first.lower()}.{last.lower()}{i+1}@gmail.com",
                 BASE_TIME - timedelta(days=60 - (i % 30)), None, "user",
-                "$2b$12$e80MvQkK6Q5Z6XhF6Q6iK.b7fK.30s8nQoUu3zJbQf0aT7GqI7rGe",
+                password_hash,
                 BASE_TIME - timedelta(days=60 - (i % 30)), BASE_TIME - timedelta(days=60 - (i % 30))
             ))
 
@@ -480,7 +483,7 @@ def main():
         
         delivery_candidates = [
             item for item in order_items 
-            if item[5] in ("OUT_FOR_DELIVERY", "DELIVERED", "DELIVERY_FAILED")
+            if item[4] in ("OUT_FOR_DELIVERY", "DELIVERED", "DELIVERY_FAILED")
         ]
         
         truck_deliveries = []
