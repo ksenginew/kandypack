@@ -4,6 +4,8 @@ DROP TRIGGER IF EXISTS trg_allocate_after_order ON orders;
 DROP TRIGGER IF EXISTS trg_allocate_after_train_schedule ON train_schedules;
 DROP TRIGGER IF EXISTS trg_allocate_after_order_items ON order_items;
 DROP TRIGGER IF EXISTS trg_allocate_after_order_items_update ON order_items;
+DROP TRIGGER IF EXISTS trg_reset_order_items_before_train_delete ON train_schedules;
+DROP TRIGGER IF EXISTS trg_allocate_after_train_delete ON train_schedules;
 
 UPDATE train_schedules AS ts
 SET remaining_capacity = ts.max_capacity - COALESCE(allocated.used_capacity, 0)
@@ -20,7 +22,7 @@ WHERE ts.id = allocated.id
 
 CREATE VIEW view_train_schedules AS
 WITH filter_parameters AS (
-	SELECT TIMESTAMPTZ '2026-09-11 14:30:00-05:00' AS "FILTER_TIMESTAMP"
+	SELECT TIMESTAMPTZ '2026-10-11 14:30:00-05:00' AS "FILTER_TIMESTAMP"
 )
 SELECT ts.id,
 	   s.store_name AS destination_store,
@@ -48,7 +50,7 @@ BEGIN
 	FOR v_schedule IN
 		SELECT id, destination_store_id, remaining_capacity
 		FROM train_schedules
-		WHERE departure_timestamp > TIMESTAMPTZ '2026-09-11 14:30:00-05:00'
+		WHERE departure_timestamp > TIMESTAMPTZ '2026-10-11 14:30:00-05:00'
 		ORDER BY departure_timestamp ASC, id ASC
 	LOOP
 		FOR v_item IN
@@ -125,6 +127,41 @@ BEGIN
 	RETURN NULL;
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION reset_order_items_before_train_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+	UPDATE order_items AS oi
+	SET item_lifecycle_status = 'PLACED'
+	FROM train_allocations AS ta
+	WHERE ta.train_id = OLD.id
+	  AND ta.order_item_id = oi.id;
+
+	RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER trg_reset_order_items_before_train_delete
+BEFORE DELETE ON train_schedules
+FOR EACH ROW
+EXECUTE FUNCTION reset_order_items_before_train_delete();
+
+CREATE OR REPLACE FUNCTION trigger_allocate_after_train_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+	CALL allocate_order_items_to_trains();
+	RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER trg_allocate_after_train_delete
+AFTER DELETE ON train_schedules
+FOR EACH ROW
+EXECUTE FUNCTION trigger_allocate_after_train_delete();
 
 CREATE TRIGGER trg_allocate_after_train_schedule
 AFTER INSERT OR UPDATE ON train_schedules
