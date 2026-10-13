@@ -1,7 +1,7 @@
 import datetime
 import pandas as pd
 import streamlit as st
-from db import fetch_all, fetch_data, fetch_one, execute_query
+from db import fetch_all, fetch_data, fetch_one, execute_query, safe_execute_query
 from ui.datatable import render_datatable
 
 def fetch_train_schedules(limit: int, offset: int) -> pd.DataFrame:
@@ -72,8 +72,34 @@ def delete_train_schedule_dialog(train_id: int):
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Yes, Delete", type="primary", use_container_width=True):
-            execute_query("DELETE FROM train_schedules WHERE id = %s;", (train_id,))
+            success, error = safe_execute_query("DELETE FROM train_schedules WHERE id = %s;", (train_id,))
+            if success:
+                st.rerun()
+            st.error(str(error))
+    with c2:
+        if st.button("Cancel", use_container_width=True):
             st.rerun()
+
+def allocate_order_items_to_trains():
+    success, error = safe_execute_query("CALL allocate_order_items_to_trains();")
+    if success:
+        st.success("Order items allocated to train schedules.")
+        st.rerun()
+    st.error(str(error))
+
+@st.dialog("Put Train Items In Transit")
+def mark_train_items_in_transit_dialog(train_id: int):
+    st.warning(f"Move all scheduled items on Train #{train_id} to in transit?")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Yes, Dispatch", type="primary", use_container_width=True):
+            success, error = safe_execute_query(
+                "CALL mark_train_items_in_transit(%s);",
+                (train_id,),
+            )
+            if success:
+                st.rerun()
+            st.error(str(error))
     with c2:
         if st.button("Cancel", use_container_width=True):
             st.rerun()
@@ -89,13 +115,33 @@ def render_train_schedules_interface():
         selected_row = render_datatable(data=fetch_train_schedules, total_count=total_count, key="train_schedules_datatable")
 
     with toolbar_container:
-        c1, c2, c3, c4 = st.columns([1, 1, 6, 1])
+        selected_train_id = int(selected_row[0]["id"]) if selected_row is not None else None
+        train_in_transit = bool(
+            selected_train_id
+            and fetch_one(
+                """
+                SELECT 1
+                FROM train_allocations AS ta
+                JOIN order_items AS oi ON oi.id = ta.order_item_id
+                WHERE ta.train_id = %s AND oi.item_lifecycle_status = 'IN_TRANSIT'
+                LIMIT 1;
+                """,
+                (selected_train_id,),
+            )
+        )
+        c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 1, 1, 4, 1])
         with c1:
-            if st.button("Edit", key="edit_train_btn", use_container_width=True, disabled=(selected_row is None)):
-                edit_train_schedule_dialog(int(selected_row[0]["id"]))
+            if st.button("Allocate Items", key="allocate_train_items_btn", use_container_width=True):
+                allocate_order_items_to_trains()
         with c2:
-            if st.button("Delete", key="delete_train_btn", use_container_width=True, disabled=(selected_row is None)):
-                delete_train_schedule_dialog(int(selected_row[0]["id"]))
+            if st.button("Mark In Transit", key="mark_train_transit_btn", use_container_width=True, disabled=(selected_row is None or train_in_transit)):
+                mark_train_items_in_transit_dialog(selected_train_id)
+        with c3:
+            if st.button("Edit", key="edit_train_btn", use_container_width=True, disabled=(selected_row is None)):
+                edit_train_schedule_dialog(selected_train_id)
         with c4:
+            if st.button("Delete", key="delete_train_btn", use_container_width=True, disabled=(selected_row is None or train_in_transit)):
+                delete_train_schedule_dialog(selected_train_id)
+        with c6:
             if st.button("Create", key="create_train_btn", use_container_width=True):
                 create_train_schedule_dialog()

@@ -6,6 +6,7 @@ DROP TRIGGER IF EXISTS trg_allocate_after_order_items ON order_items;
 DROP TRIGGER IF EXISTS trg_allocate_after_order_items_update ON order_items;
 DROP TRIGGER IF EXISTS trg_reset_order_items_before_train_delete ON train_schedules;
 DROP TRIGGER IF EXISTS trg_allocate_after_train_delete ON train_schedules;
+DROP TRIGGER IF EXISTS trg_prevent_in_transit_train_delete ON train_schedules;
 
 UPDATE train_schedules AS ts
 SET remaining_capacity = ts.max_capacity - COALESCE(allocated.used_capacity, 0)
@@ -97,6 +98,19 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE PROCEDURE mark_train_items_in_transit(p_train_id BIGINT)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+	UPDATE order_items AS oi
+	SET item_lifecycle_status = 'IN_TRANSIT'
+	FROM train_allocations AS ta
+	WHERE ta.train_id = p_train_id
+	  AND ta.order_item_id = oi.id
+	  AND oi.item_lifecycle_status = 'SCHEDULED';
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION trigger_allocate_order_items_to_trains()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -142,6 +156,30 @@ BEGIN
 	RETURN OLD;
 END;
 $$;
+
+CREATE OR REPLACE FUNCTION prevent_in_transit_train_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+	IF EXISTS (
+		SELECT 1
+		FROM train_allocations AS ta
+		JOIN order_items AS oi ON oi.id = ta.order_item_id
+		WHERE ta.train_id = OLD.id
+		  AND oi.item_lifecycle_status = 'IN_TRANSIT'
+	) THEN
+		RAISE EXCEPTION 'Train % cannot be deleted while items are in transit', OLD.id;
+	END IF;
+
+	RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER trg_prevent_in_transit_train_delete
+BEFORE DELETE ON train_schedules
+FOR EACH ROW
+EXECUTE FUNCTION prevent_in_transit_train_delete();
 
 CREATE TRIGGER trg_reset_order_items_before_train_delete
 BEFORE DELETE ON train_schedules
