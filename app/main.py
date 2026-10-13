@@ -61,6 +61,14 @@ if st.session_state.authenticated:
                 "routes/04_Truck_Logistics.py", title="Last-Mile Dispatch", icon="📦"
             ),
         )
+    if user_role in ["store_manager", "logistics", "admin"]:
+        if "Logistics & Dispatch" not in nav_sections:
+            nav_sections["Logistics & Dispatch"] = []
+        nav_sections["Logistics & Dispatch"].append(
+            st.Page(
+                "routes/12_Receive_Cargo.py", title="Receive Cargo", icon="📦"
+            ),
+        )
     if user_role in ["store_manager", "admin"]:
         nav_sections["Fleet & Operations"] = [
             st.Page("routes/11_Delivery_Operations.py", title="Delivery Operations", icon="🚚"),

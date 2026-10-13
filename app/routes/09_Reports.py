@@ -182,14 +182,7 @@ elif selected_report.startswith("4."):
         if df.empty:
             st.warning("No logged truck schedules found in this time range.")
         else:
-            violations = df[df["limit_exceeded"] == True] if "limit_exceeded" in df.columns else pd.DataFrame()
-            if not violations.empty:
-                st.error(f"⚠️ Limit Exceeded: {len(violations)} employee(s) crossed maximum working hours for this period! (Driver limit: 40 hrs, Assistant limit: 60 hrs)")
-
-            def highlight_violations(row):
-                return ["background-color: #ffd6d6; color: #900;" if row.get("limit_exceeded") else "" for _ in row]
-
-            st.dataframe(df.style.apply(highlight_violations, axis=1), use_container_width=True)
+            st.dataframe(df, use_container_width=True)
             render_download_button(df, f"employee_working_hours_{start_date}_{end_date}.csv")
 
 

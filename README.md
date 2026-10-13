@@ -18,10 +18,11 @@
 - [Tech Stack](#-tech-stack)
 - [Project Structure](#-project-structure)
 - [Quick Start with Docker](#-quick-start-with-docker-recommended)
-- [Local Development (Without Docker)](#-local-development-without-docker)
 - [Environment Variables](#-environment-variables)
 - [Database Management & Useful Commands](#-database-management--useful-commands)
+- [Team & Individual Contributions](#-team--individual-contributions)
 - [License](#-license)
+
 
 ---
 
@@ -106,18 +107,20 @@ The platform is designed to produce key operational and business intelligence re
 
 ```text
 kandypack/
-├── app/
-│   └── main.py              # Streamlit application UI & PostgreSQL connection logic
+├── app/                     # Streamlit application UI, routes & interfaces
+│   ├── interfaces/          # Business logic & DB data access interfaces
+│   ├── routes/              # Multipage UI views (Orders, Transit, Staff, Reports, etc.)
+│   └── main.py              # Application entry point & routing
+├── schema/                  # PostgreSQL DDL schemas, stored procedures & triggers
+├── scripts/                 # Setup and database seed generation scripts
+├── docs/                    # Architecture and operational documentation
+├── tests/                   # Integration and rule validation test suite
 ├── Dockerfile               # Multi-stage container build (base, dev, prod)
 ├── compose.yaml             # Core Docker Compose definition (app + postgres services)
 ├── compose.override.yaml    # Dev compose overrides (hot reloading & host volume binding)
 ├── compose.prod.yaml        # Production compose configuration (immutable container)
 ├── requirements.txt         # Pinned Python package dependencies
-├── project.md               # Original project requirements specification
-├── README.Docker.md         # Docker command cheat sheet
-├── .dockerignore            # Docker build ignore rules
-├── .gitignore               # Git ignored files & directories
-└── README.md                # Comprehensive project documentation
+└── README.md                # Project documentation & setup guide
 ```
 
 ---
@@ -251,6 +254,21 @@ The SQL files in `schema/` are mounted into PostgreSQL's initialization director
 
 ---
 
+## 👥 Team & Individual Contributions
+
+For a full commit-by-commit breakdown and pull request audit trail, see the complete [Individual Contributions Report](report.md).
+
+| Contributor | GitHub | Key Responsibilities & Module Deliverables |
+| :--- | :--- | :--- |
+| **Kavindu Santhusa** | [`@ksenginew`](https://github.com/ksenginew) | Multi-stage Docker infra, DB schema foundation, authentication & RBAC (`app/auth.py`), master data CRUD interfaces, BI reports (`app/reports.py`), operational AI Assistant, and PR integration. |
+| **Lahiru Perera** | [`@LahiruPerera2004`](https://github.com/LahiruPerera2004) | Bulk train scheduling & capacity allocation procedures (`schema/02-allocate_train.sql`), statement-level train allocation triggers, train schedule views, and order item SQL modularization. |
+| **Saranyu** | [`@Saranyu-2k4`](https://github.com/Saranyu-2k4) | Road delivery dispatch procedures (`schema/06-schedule_delivery.sql`), driver/assistant weekly working hour and consecutive-trip roster constraints, dispatch UI, and test suites. |
+| **Chameera Chamikara** | [`@ChameeraHD`](https://github.com/ChameeraHD) | Atomic order placement procedure (`schema/04-place_order.sql`) with 7-day advance constraint, customer order processing UI, and regional delivery address seed data. |
+| **Dinol Fernando** | [`@dinolfernando`](https://github.com/dinolfernando) | Arriving train cargo reception stored procedure (`schema/05-receive_cargo.sql`), cargo intake UI (`app/routes/12_Receive_Cargo.py`), and regional inventory state transitions. |
+
+---
+
 ## 📄 License
 
-This project is open source and available under the [MIT License](LICENSE).
+This project is open source and available under the [Unlicense / Public Domain License](LICENSE).
+
