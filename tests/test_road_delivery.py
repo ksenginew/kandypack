@@ -114,7 +114,7 @@ class RoadDeliveryTests(unittest.TestCase):
             FROM truck_item_deliveries d JOIN order_items i ON i.id = d.order_item_id
             WHERE d.truck_schedule_id = %s""", (schedule,)).fetchone()
         self.assertEqual(assigned, (4, 2))
-        self.assertEqual(self.conn.execute("SELECT count(*) FROM order_items WHERE item_lifecycle_status = 'STORE_RECEIVED'").fetchone()[0], 4)
+        self.assertEqual(self.conn.execute("SELECT count(*) FROM order_items WHERE item_lifecycle_status = 'OUT_FOR_DELIVERY'").fetchone()[0], 4)
 
     def test_unreceived_empty_and_wrong_route_orders_rejected(self):
         valid = self.received_order()

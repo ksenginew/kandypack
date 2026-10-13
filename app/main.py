@@ -71,6 +71,7 @@ if st.session_state.authenticated:
         )
     if user_role in ["store_manager", "admin"]:
         nav_sections["Fleet & Operations"] = [
+            st.Page("routes/11_Delivery_Operations.py", title="Delivery Operations", icon="🚚"),
             st.Page("routes/05_Fleet_Routes.py", title="Fleet & Routes", icon="🚛"),
             st.Page("routes/06_Staff.py", title="Staff & Drivers", icon="👷"),
         ]

@@ -226,7 +226,7 @@ BEGIN
 END;
 $$;
 
--- Schedule complete received orders in one transaction. Duplicate route records
+-- Schedule and dispatch complete received orders in one transaction. Duplicate route records
 -- with identical store, name, service area and time limit represent one route.
 CREATE OR REPLACE FUNCTION create_received_order_delivery(
     p_truck_id BIGINT, p_route_id BIGINT, p_driver_id BIGINT,
@@ -300,8 +300,10 @@ BEGIN
     RETURNING id INTO v_schedule_id;
     INSERT INTO truck_item_deliveries (truck_schedule_id, order_item_id)
         SELECT v_schedule_id, id FROM order_items WHERE order_id = ANY(p_order_ids);
-    -- The items remain STORE_RECEIVED while reserved for a future trip.
-    -- Dispatch and delivery confirmation own the later lifecycle transitions.
+    -- Creating the truck schedule is the dispatch step for these orders.
+    -- Status changes roll back with the schedule if any validation fails.
+    UPDATE order_items SET item_lifecycle_status = 'OUT_FOR_DELIVERY'
+    WHERE order_id = ANY(p_order_ids);
     RETURN v_schedule_id;
 END;
 $$;
