@@ -15,6 +15,7 @@ DROP TABLE IF EXISTS stores CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 
 DROP TYPE IF EXISTS enum_item_lifecycle_status CASCADE;
+DROP TYPE IF EXISTS enum_train_state CASCADE;
 DROP TYPE IF EXISTS enum_vehicle_status CASCADE;
 DROP TYPE IF EXISTS enum_employee_status CASCADE;
 DROP TYPE IF EXISTS enum_employee_role CASCADE;
@@ -67,6 +68,12 @@ CREATE TYPE enum_item_lifecycle_status AS ENUM (
     'DELIVERED',
     'DELIVERY_FAILED',
     'CANCELLED'
+);
+
+CREATE TYPE enum_train_state AS ENUM (
+    'SCHEDULED',
+    'IN_TRANSIT',
+    'DELIVERED'
 );
 
 CREATE TABLE users (
@@ -190,6 +197,7 @@ CREATE TABLE train_schedules (
     departure_timestamp  TIMESTAMPTZ NOT NULL,
     max_capacity         NUMERIC(10, 2) NOT NULL CHECK (max_capacity > 0),
     remaining_capacity   NUMERIC(12, 4) NOT NULL CHECK (remaining_capacity >= 0 AND remaining_capacity <= max_capacity),
+    train_state          enum_train_state NOT NULL DEFAULT 'SCHEDULED',
     created_by           UUID REFERENCES users(id) ON DELETE SET NULL,
     updated_by           UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
