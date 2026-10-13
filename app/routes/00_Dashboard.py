@@ -4,12 +4,17 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from db import safe_fetch_all
+from interfaces.my_orders import render_my_orders_dashboard
 
 st.set_page_config(
     page_title="Kandypack Supply Chain Overview",
     page_icon="🚆",
     layout="wide",
 )
+
+if getattr(st.session_state.get("user"), "role", None) == "user":
+    render_my_orders_dashboard()
+    st.stop()
 
 def load_data(query: str, params: tuple = None) -> pd.DataFrame:
     rows, err = safe_fetch_all(query, params)

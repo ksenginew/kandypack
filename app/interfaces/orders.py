@@ -1,8 +1,35 @@
 import datetime
+from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
+from psycopg import Error
 from db import fetch_all, fetch_data, fetch_one, execute_query
 from ui.datatable import render_datatable
+
+LOCAL_TIME = ZoneInfo("Asia/Colombo")
+DELIVERY_TIME = datetime.time(12, 0)
+
+
+def earliest_delivery_date(order_timestamp, delivery_time=DELIVERY_TIME):
+    earliest = order_timestamp.astimezone(LOCAL_TIME) + datetime.timedelta(days=7)
+    candidate = datetime.datetime.combine(earliest.date(), delivery_time, tzinfo=LOCAL_TIME)
+    return earliest.date() if candidate >= earliest else earliest.date() + datetime.timedelta(days=1)
+
+
+def validate_delivery_date(delivery_timestamp, order_timestamp, delivery_time=DELIVERY_TIME):
+    if delivery_timestamp < order_timestamp + datetime.timedelta(days=7):
+        minimum = earliest_delivery_date(order_timestamp, delivery_time)
+        st.error(f"Delivery must be at least 7 days after the order is placed. Choose {minimum:%d %b %Y} or later.")
+        return False
+    return True
+
+
+def show_order_error(error):
+    if getattr(error.diag, "constraint_name", None) == "chk_place_orders_7_days_advance":
+        st.error("Delivery must be at least 7 days after the order is placed. Select a later delivery date and try again.")
+    else:
+        st.error("The order could not be saved. Check the order details and try again.")
+
 
 def fetch_orders(limit: int, offset: int) -> pd.DataFrame:
     query = """
@@ -39,6 +66,7 @@ def create_order_dialog():
     cust_map = {str(c.id): c for c in customers}
     cust_options = {str(c.id): c.customer_name for c in customers}
     route_options = {str(r.id): r.route_name for r in routes}
+    minimum_date = earliest_delivery_date(datetime.datetime.now(LOCAL_TIME))
 
     with st.form("create_order_form"):
         selected_cust_id = st.selectbox("Customer", options=list(cust_options.keys()), format_func=lambda x: cust_options[x])
@@ -61,7 +89,9 @@ def create_order_dialog():
 
         c1, c2 = st.columns(2)
         with c1:
-            delivery_date = st.date_input("Delivery Date", min_value=datetime.date.today())
+            delivery_date = st.date_input("Delivery Date", value=minimum_date, min_value=minimum_date,
+                                          key="create_order_delivery_date",
+                                          help="Orders require at least 7 days' advance notice. Dates are in Sri Lanka time.")
         with c2:
             time_slot = st.selectbox("Preferred Slot", ["Morning (08:00 - 11:00)", "Midday (11:00 - 14:00)", "Afternoon (14:00 - 17:00)","Evening (17:00 - 20:00)"])
 
@@ -69,15 +99,21 @@ def create_order_dialog():
             if not delivery_address.strip() or not contact_phone.strip():
                 st.error("Address and contact phone are required.")
                 return
-            delivery_timestamp = datetime.datetime.combine(delivery_date, datetime.time(12, 0))
-            order_row = fetch_one(
-                """
-                INSERT INTO orders (customer_id, route_id, delivery_address, contact_phone, delivery_date, prefered_delivery_slot)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id;
-                """,
-                (int(selected_cust_id), int(selected_route_id), delivery_address.strip(), contact_phone.strip(), delivery_timestamp, time_slot),
-            )
+            delivery_timestamp = datetime.datetime.combine(delivery_date, DELIVERY_TIME, tzinfo=LOCAL_TIME)
+            if not validate_delivery_date(delivery_timestamp, datetime.datetime.now(LOCAL_TIME)):
+                return
+            try:
+                order_row = fetch_one(
+                    """
+                    INSERT INTO orders (customer_id, route_id, delivery_address, contact_phone, delivery_date, prefered_delivery_slot)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id;
+                    """,
+                    (int(selected_cust_id), int(selected_route_id), delivery_address.strip(), contact_phone.strip(), delivery_timestamp, time_slot),
+                )
+            except Error as error:
+                show_order_error(error)
+                return
             if order_row:
                 st.session_state["selected_order_id"] = order_row.id
                 st.success(f"Order #{order_row.id} created!")
@@ -92,6 +128,10 @@ def edit_order_dialog(order_id: int):
 
     routes = fetch_all("SELECT id, route_name FROM routes ORDER BY route_name ASC")
     route_options = {str(r.id): r.route_name for r in routes}
+    # Preserve the existing local delivery time when editing its date or details.
+    local_delivery = order.delivery_date.astimezone(LOCAL_TIME)
+    delivery_time = local_delivery.time()
+    minimum_date = earliest_delivery_date(order.order_date, delivery_time)
 
     with st.form("edit_order_form"):
         selected_route_id = st.selectbox(
@@ -102,19 +142,30 @@ def edit_order_dialog(order_id: int):
         )
         address = st.text_area("Delivery Address", value=order.delivery_address)
         phone = st.text_input("Contact Phone", value=order.contact_phone)
-        delivery_date = st.date_input("Delivery Date", value=order.delivery_date.date() if order.delivery_date else datetime.date.today())
+        delivery_date = st.date_input("Delivery Date", value=local_delivery.date(), min_value=minimum_date,
+                                      key=f"edit_order_delivery_date_{order_id}",
+                                      help="Delivery must be at least 7 days after this order's original placement date.")
         slot = st.text_input("Preferred Slot", value=order.prefered_delivery_slot or "")
 
         if st.form_submit_button("Save Changes"):
-            delivery_timestamp = datetime.datetime.combine(delivery_date, datetime.time(12, 0))
-            execute_query(
-                """
-                UPDATE orders 
-                SET route_id = %s, delivery_address = %s, contact_phone = %s, delivery_date = %s, prefered_delivery_slot = %s
-                WHERE id = %s;
-                """,
-                (int(selected_route_id), address.strip(), phone.strip(), delivery_timestamp, slot.strip(), order_id),
-            )
+            if not address.strip() or not phone.strip():
+                st.error("Address and contact phone are required.")
+                return
+            delivery_timestamp = datetime.datetime.combine(delivery_date, delivery_time, tzinfo=LOCAL_TIME)
+            if not validate_delivery_date(delivery_timestamp, order.order_date, delivery_time):
+                return
+            try:
+                execute_query(
+                    """
+                    UPDATE orders
+                    SET route_id = %s, delivery_address = %s, contact_phone = %s, delivery_date = %s, prefered_delivery_slot = %s
+                    WHERE id = %s;
+                    """,
+                    (int(selected_route_id), address.strip(), phone.strip(), delivery_timestamp, slot.strip(), order_id),
+                )
+            except Error as error:
+                show_order_error(error)
+                return
             st.success("Order updated!")
             st.rerun()
 

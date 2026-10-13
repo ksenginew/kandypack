@@ -172,6 +172,44 @@ docker compose -f compose.yaml -f compose.prod.yaml up -d --build
 
 Open [http://localhost:8501](http://localhost:8501) after the services become healthy.
 
+### Signing in with seed accounts
+
+Use the account's `email` from `schema/01-seed.sql` and the password `password`.
+For example, use `manager.colombo@supplychain.internal` for the Colombo store
+manager or `admin@supplychain.internal` for the administrator. Enter the email
+without the SQL quotes; the `name` column is a display name.
+
+If an existing database was initialized with the original bcrypt seed hashes,
+apply the targeted repair to make those accounts compatible with Argon2 login:
+
+```bash
+docker compose exec -T db psql -U postgres -d kandypack -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/08-repair_seed_passwords.sql
+```
+
+The repair only replaces the original faulty hash and can be applied repeatedly.
+New database setups use the corrected seed hashes automatically.
+
+### Delivery operations and user tracking
+
+Creating a schedule for received orders in **Last-Mile Dispatch** automatically
+marks all selected items **OUT_FOR_DELIVERY**. The schedule, item assignments,
+and status changes are saved together; a failed booking leaves the items unchanged.
+Open **Fleet & Operations → Delivery Operations** to select the truck schedule
+and order and record **Delivered**, **Delivery Failed**, or **Cancelled** as the outcome. Store managers
+can update deliveries for their own stores; administrators can update all stores.
+Only items assigned to the selected trip are updated.
+
+Accounts with the `user` role see their own orders and item statuses on the
+**Dashboard**, including orders out for delivery. Orders are linked through the
+customer's **Linked User Account** field. Refresh the dashboard to see updates.
+
+For an existing database, apply the updated scheduling function and delivery procedure:
+
+```bash
+docker compose exec -T db psql -U postgres -d kandypack -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/06-schedule_delivery.sql
+docker compose exec -T db psql -U postgres -d kandypack -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/09-delivery_operations.sql
+```
+
 ### 4. Stopping Services
 
 - **Stop containers**:

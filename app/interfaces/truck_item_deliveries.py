@@ -3,9 +3,9 @@ import pandas as pd
 from typing import Optional
 from db import fetch_data, fetch_one, execute_query
 from ui.datatable import render_datatable
+from interfaces.delivery_operations import change_order_status_dialog
 
 
-@st.cache_data(ttl=300)
 def fetch_truck_schedules() -> pd.DataFrame:
     user = st.session_state.get("user")
     user_role = user.role if user else None
@@ -15,17 +15,18 @@ def fetch_truck_schedules() -> pd.DataFrame:
     query = """
         SELECT t.id, t.route_id, t.license_plate, t.route_name, t.start_timestamp, t.end_timestamp
         FROM view_truck_schedules_overview t
+        JOIN routes r ON r.id = t.route_id
+        JOIN stores store ON store.id = r.store_id
     """
     if user_role == "store_manager":
-        query += "WHERE t.route_id IN (SELECT route_id FROM store_managers_routes WHERE user_id = %s) "
+        query += "WHERE store.manager_id = %s "
         params = (str(user.id),)
     else:
         params = None
-    query += "ORDER BY start_timestamp DESC;"
+    query += "ORDER BY t.start_timestamp DESC;"
     return fetch_data(query, params)
 
 
-@st.cache_data(ttl=300)
 def fetch_assigned_orders_count(schedule_id: int) -> int:
     query = "SELECT COUNT(*) FROM view_schedule_assigned_orders WHERE truck_schedule_id = %s;"
     res = fetch_one(query, (schedule_id,))
@@ -117,29 +118,11 @@ def unassign_order_dialog(schedule_id: int, order_id: int):
             st.rerun()
 
 
-@st.dialog("Change Order Status")
-def change_order_status_dialog(order_id: int):
-    st.markdown(f"### Update Status for Order #{order_id}")
-
-    new_status = st.selectbox(
-        "Select New Status", options=["DELIVERED", "DELIVERY_FAILED", "CANCELLED"]
-    )
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Apply Status", type="primary", use_container_width=True):
-            execute_query(
-                "CALL sp_update_order_item_status(%s, %s);", (order_id, new_status)
-            )
-            st.success("Order item statuses updated successfully.")
-            st.rerun()
-    with col2:
-        if st.button("Cancel", use_container_width=True):
-            st.rerun()
-
-
 def render_truck_deliveries_interface():
     st.subheader("Truck Schedule Orders Management")
+    notice = st.session_state.pop("delivery_operations_notice", None)
+    if notice:
+        st.success(notice)
 
     schedules_df = fetch_truck_schedules()
     if schedules_df.empty:
@@ -201,4 +184,4 @@ def render_truck_deliveries_interface():
                 use_container_width=True,
                 disabled=(selected_order_id is None),
             ):
-                change_order_status_dialog(selected_order_id)
+                change_order_status_dialog(selected_schedule_id, selected_order_id)

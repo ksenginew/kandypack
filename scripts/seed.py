@@ -115,6 +115,7 @@ def main():
 
     total_rows = 0
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        f.write("-- Development seed accounts: sign in with the email address and password 'password'.\n")
         f.write("BEGIN;\n\n")
         
         users = [

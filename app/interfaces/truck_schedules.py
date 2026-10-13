@@ -188,7 +188,7 @@ def schedule_form(schedule=None):
             if not orders:
                 st.info("No complete, unassigned orders have been received for this route.")
             st.caption("An order is ready when all its items are received at this store. "
-                       "All items in each selected order will be assigned to this delivery.")
+                       "Creating the schedule assigns all selected items and marks them Out for delivery.")
         truck_id = selection("Truck", truck_labels, schedule.truck_id if schedule else None, f"{prefix}_truck")
         col1, col2 = st.columns(2)
         with col1:
@@ -252,7 +252,7 @@ def save_schedule(values, schedule_id=None):
     except Error as error:
         show_database_error(error)
         return
-    st.session_state[NOTICE_KEY] = "Schedule updated." if schedule_id else "Schedule created."
+    st.session_state[NOTICE_KEY] = "Schedule updated." if schedule_id else "Schedule created. Assigned items are now Out for delivery."
     st.rerun()
 
 
@@ -308,7 +308,8 @@ def delete_schedule_dialog(schedule_id):
 
 
 def render_truck_schedules_interface():
-    st.caption("Select received orders and assign a truck and crew for delivery. All times shown are Sri Lanka time.")
+    st.caption("Create a schedule to assign a truck and crew and mark selected received orders Out for delivery. "
+               "All times shown are Sri Lanka time.")
     if st.session_state.get("user") is None or getattr(st.session_state.get("user"), "role", None) not in ("store_manager", "admin"):
         st.error("You do not have permission to view truck schedules.")
         return
