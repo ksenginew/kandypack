@@ -12,6 +12,14 @@ def fetch_train_schedules(limit: int, offset: int) -> pd.DataFrame:
     """
     return fetch_data(query, (limit, offset))
 
+def fetch_in_transit_train_schedules(limit: int, offset: int) -> pd.DataFrame:
+    query = """
+        SELECT id, destination_store, departure_timestamp, max_capacity, remaining_capacity, allocated_items
+        FROM view_in_transit_train_schedules
+        LIMIT %s OFFSET %s;
+    """
+    return fetch_data(query, (limit, offset))
+
 @st.dialog("Create Train Schedule")
 def create_train_schedule_dialog():
     stores = fetch_all("SELECT id, store_name FROM stores ORDER BY store_name ASC;")
@@ -88,13 +96,13 @@ def allocate_order_items_to_trains():
     st.error(str(error))
 
 @st.dialog("Put Train Items In Transit")
-def mark_train_items_in_transit_dialog(train_id: int):
-    st.warning(f"Move all scheduled items on Train #{train_id} to in transit?")
+def mark_train_in_transit_dialog(train_id: int):
+    st.warning(f"Move Train #{train_id} to in transit?")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Yes, Dispatch", type="primary", use_container_width=True):
             success, error = safe_execute_query(
-                "CALL mark_train_items_in_transit(%s);",
+                "CALL mark_train_in_transit(%s);",
                 (train_id,),
             )
             if success:
@@ -116,32 +124,49 @@ def render_train_schedules_interface():
 
     with toolbar_container:
         selected_train_id = int(selected_row[0]["id"]) if selected_row is not None else None
-        train_in_transit = bool(
-            selected_train_id
-            and fetch_one(
-                """
-                SELECT 1
-                FROM train_allocations AS ta
-                JOIN order_items AS oi ON oi.id = ta.order_item_id
-                WHERE ta.train_id = %s AND oi.item_lifecycle_status = 'IN_TRANSIT'
-                LIMIT 1;
-                """,
-                (selected_train_id,),
-            )
-        )
         c1, c2, c3, c4, c5, c6 = st.columns([2, 2, 1, 1, 4, 1])
         with c1:
             if st.button("Allocate Items", key="allocate_train_items_btn", use_container_width=True):
                 allocate_order_items_to_trains()
         with c2:
-            if st.button("Mark In Transit", key="mark_train_transit_btn", use_container_width=True, disabled=(selected_row is None or train_in_transit)):
-                mark_train_items_in_transit_dialog(selected_train_id)
+            if st.button("Mark In Transit", key="mark_train_transit_btn", use_container_width=True, disabled=(selected_row is None)):
+                mark_train_in_transit_dialog(selected_train_id)
         with c3:
             if st.button("Edit", key="edit_train_btn", use_container_width=True, disabled=(selected_row is None)):
                 edit_train_schedule_dialog(selected_train_id)
         with c4:
-            if st.button("Delete", key="delete_train_btn", use_container_width=True, disabled=(selected_row is None or train_in_transit)):
+            if st.button("Delete", key="delete_train_btn", use_container_width=True, disabled=(selected_row is None)):
                 delete_train_schedule_dialog(selected_train_id)
         with c6:
             if st.button("Create", key="create_train_btn", use_container_width=True):
                 create_train_schedule_dialog()
+
+def mark_train_delivered_dialog(train_id: int):
+    success, error = safe_execute_query("CALL mark_train_delivered(%s);", (train_id,))
+    if success:
+        st.rerun()
+    st.error(str(error))
+
+def render_in_transit_train_schedules_interface():
+    table_container = st.container()
+    toolbar_container = st.container()
+
+    count_row = fetch_one("SELECT COUNT(*) FROM view_in_transit_train_schedules;")
+    total_count = count_row[0] if count_row else 0
+
+    with table_container:
+        selected_row = render_datatable(
+            data=fetch_in_transit_train_schedules,
+            total_count=total_count,
+            key="in_transit_train_schedules_datatable",
+        )
+
+    with toolbar_container:
+        selected_train_id = int(selected_row[0]["id"]) if selected_row is not None else None
+        if st.button(
+            "Mark Delivered",
+            key="deliver_train_btn",
+            use_container_width=True,
+            disabled=(selected_row is None),
+        ):
+            mark_train_delivered_dialog(selected_train_id)
