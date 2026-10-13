@@ -10,19 +10,32 @@ from psycopg.rows import dict_row
 import reports
 from db import DATABASE_URL, pool
 
-# ---------------------------------------------------------
-# Page Configuration
-# ---------------------------------------------------------
+import math
+
+
+def sanitize(obj):
+    if isinstance(obj, float) and math.isnan(obj):
+        return None
+    elif isinstance(obj, dict):
+        return {k: sanitize(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize(item) for item in obj]
+    return obj
+
+
 st.set_page_config(
     page_title="Kandypack Logistics AI Assistant",
     page_icon="🤖",
     layout="wide",
 )
 
-MODEL_NAME = os.getenv("MODEL_NAME") or st.secrets.get("MODEL_NAME", "gemini/gemini-3.5-flash-lite")
+MODEL_NAME = os.getenv("MODEL_NAME") or st.secrets.get(
+    "MODEL_NAME", "gemini/gemini-3.5-flash-lite"
+)
 API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY")
 if API_KEY:
     os.environ["GEMINI_API_KEY"] = API_KEY
+
 
 @st.cache_data(ttl=3600)
 def generate_schema_reference() -> str:
@@ -72,7 +85,10 @@ def generate_schema_reference() -> str:
                 fks = cur.fetchall()
 
         fk_map = {
-            (fk["source_table"], fk["source_column"]): f" -> {fk['target_table']}.{fk['target_column']}"
+            (
+                fk["source_table"],
+                fk["source_column"],
+            ): f" -> {fk['target_table']}.{fk['target_column']}"
             for fk in fks
         }
 
@@ -80,7 +96,11 @@ def generate_schema_reference() -> str:
         for row in columns_meta:
             tbl = row["table_name"]
             col = row["column_name"]
-            dtype = row["udt_name"] if row["data_type"] == "USER-DEFINED" else row["data_type"]
+            dtype = (
+                row["udt_name"]
+                if row["data_type"] == "USER-DEFINED"
+                else row["data_type"]
+            )
             fk_target = fk_map.get((tbl, col), "")
             tables.setdefault(tbl, []).append(f"{col} {dtype}{fk_target}")
 
@@ -91,6 +111,7 @@ def generate_schema_reference() -> str:
         return "\n".join(lines)
     except Exception as exc:
         return f"### Schema Error: Could not read schema: {exc}"
+
 
 def execute_select_query(query: str, params: dict | list | None = None) -> dict:
     """
@@ -111,45 +132,71 @@ def execute_select_query(query: str, params: dict | list | None = None) -> dict:
                     return {"row_count": 0, "data": [], "truncated": False}
                 return {
                     "row_count": len(rows),
-                    "data": list(map(lambda row: row._asdict(), rows[:50])),  # Protect context window
+                    # Protect context window
+                    "data": list(map(lambda row: row._asdict(), rows[:50])),
                     "truncated": len(rows) > 50,
                 }
     except Exception as exc:
         return {"error": f"Database Execution Error: {str(exc)}"}
 
-def tool_quarterly_sales_report(year: int | None = None, quarter: int | None = None) -> dict:
+
+def tool_quarterly_sales_report(
+    year: int | None = None, quarter: int | None = None
+) -> dict:
     df = reports.get_quarterly_sales_report(year, quarter)
     return {"row_count": len(df), "data": df.head(50).to_dict(orient="records")}
+
 
 def tool_most_ordered_items_report(year: int, quarter: int, limit: int = 10) -> dict:
     df = reports.get_most_ordered_items_report(year, quarter, limit)
     return {"row_count": len(df), "data": df.to_dict(orient="records")}
 
-def tool_city_route_sales_report(start_date: str | None = None, end_date: str | None = None) -> dict:
+
+def tool_city_route_sales_report(
+    start_date: str | None = None, end_date: str | None = None
+) -> dict:
     df = reports.get_city_route_sales_report(start_date, end_date)
     return {"row_count": len(df), "data": df.head(50).to_dict(orient="records")}
+
 
 def tool_employee_working_hours_report(start_date: str, end_date: str) -> dict:
     df = reports.get_employee_working_hours_report(start_date, end_date)
     return {"row_count": len(df), "data": df.head(50).to_dict(orient="records")}
 
+
 def tool_monthly_truck_usage_report(year: int, month: int) -> dict:
     df = reports.get_monthly_truck_usage_report(year, month)
     return {"row_count": len(df), "data": df.to_dict(orient="records")}
+
 
 def tool_customer_order_history_report(customer_id: int | None = None) -> dict:
     df = reports.get_customer_order_history_report(customer_id)
     return {"row_count": len(df), "data": df.head(50).to_dict(orient="records")}
 
+
 # Tool Registry
 TOOL_RUNNERS = {
-    "execute_select_query": lambda args: execute_select_query(args.get("query"), args.get("params")),
-    "get_quarterly_sales_report": lambda args: tool_quarterly_sales_report(args.get("year"), args.get("quarter")),
-    "get_most_ordered_items_report": lambda args: tool_most_ordered_items_report(args["year"], args["quarter"], args.get("limit", 10)),
-    "get_city_route_sales_report": lambda args: tool_city_route_sales_report(args.get("start_date"), args.get("end_date")),
-    "get_employee_working_hours_report": lambda args: tool_employee_working_hours_report(args["start_date"], args["end_date"]),
-    "get_monthly_truck_usage_report": lambda args: tool_monthly_truck_usage_report(args["year"], args["month"]),
-    "get_customer_order_history_report": lambda args: tool_customer_order_history_report(args.get("customer_id")),
+    "execute_select_query": lambda args: execute_select_query(
+        args.get("query"), args.get("params")
+    ),
+    "get_quarterly_sales_report": lambda args: tool_quarterly_sales_report(
+        args.get("year"), args.get("quarter")
+    ),
+    "get_most_ordered_items_report": lambda args: tool_most_ordered_items_report(
+        args["year"], args["quarter"], args.get("limit", 10)
+    ),
+    "get_city_route_sales_report": lambda args: tool_city_route_sales_report(
+        args.get("start_date"), args.get("end_date")
+    ),
+    "get_employee_working_hours_report": lambda args: tool_employee_working_hours_report(
+        args["start_date"], args["end_date"]
+    ),
+    "get_monthly_truck_usage_report": lambda args: tool_monthly_truck_usage_report(
+        args["year"], args["month"]
+    ),
+    "get_customer_order_history_report": lambda args: tool_customer_order_history_report(
+        args.get("customer_id")
+    ),
 }
 
 TOOLS = [
@@ -161,8 +208,14 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "The SQL SELECT or WITH query to run."},
-                    "params": {"type": "object", "description": "Named query parameters as key-value pairs."},
+                    "query": {
+                        "type": "string",
+                        "description": "The SQL SELECT or WITH query to run.",
+                    },
+                    "params": {
+                        "type": "object",
+                        "description": "Named query parameters as key-value pairs.",
+                    },
                 },
                 "required": ["query"],
             },
@@ -176,8 +229,14 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "year": {"type": "integer", "description": "Filter by year (e.g., 2024)."},
-                    "quarter": {"type": "integer", "description": "Filter by quarter (1-4)."},
+                    "year": {
+                        "type": "integer",
+                        "description": "Filter by year (e.g., 2024).",
+                    },
+                    "quarter": {
+                        "type": "integer",
+                        "description": "Filter by quarter (1-4).",
+                    },
                 },
             },
         },
@@ -191,8 +250,14 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "year": {"type": "integer", "description": "Order year."},
-                    "quarter": {"type": "integer", "description": "Order quarter (1-4)."},
-                    "limit": {"type": "integer", "description": "Maximum number of items to return (default 10)."},
+                    "quarter": {
+                        "type": "integer",
+                        "description": "Order quarter (1-4).",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of items to return (default 10).",
+                    },
                 },
                 "required": ["year", "quarter"],
             },
@@ -206,8 +271,14 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "start_date": {"type": "string", "description": "Start date filter in 'YYYY-MM-DD' format."},
-                    "end_date": {"type": "string", "description": "End date filter in 'YYYY-MM-DD' format."},
+                    "start_date": {
+                        "type": "string",
+                        "description": "Start date filter in 'YYYY-MM-DD' format.",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "End date filter in 'YYYY-MM-DD' format.",
+                    },
                 },
             },
         },
@@ -220,8 +291,14 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "start_date": {"type": "string", "description": "Period start date in 'YYYY-MM-DD' format."},
-                    "end_date": {"type": "string", "description": "Period end date in 'YYYY-MM-DD' format."},
+                    "start_date": {
+                        "type": "string",
+                        "description": "Period start date in 'YYYY-MM-DD' format.",
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "Period end date in 'YYYY-MM-DD' format.",
+                    },
                 },
                 "required": ["start_date", "end_date"],
             },
@@ -236,7 +313,10 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "year": {"type": "integer", "description": "Calendar year."},
-                    "month": {"type": "integer", "description": "Calendar month (1-12)."},
+                    "month": {
+                        "type": "integer",
+                        "description": "Calendar month (1-12).",
+                    },
                 },
                 "required": ["year", "month"],
             },
@@ -250,12 +330,16 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "customer_id": {"type": "integer", "description": "Customer ID to filter, or null for all orders."},
+                    "customer_id": {
+                        "type": "integer",
+                        "description": "Customer ID to filter, or null for all orders.",
+                    },
                 },
             },
         },
     },
 ]
+
 
 def build_system_prompt() -> str:
     schema = generate_schema_reference()
@@ -277,8 +361,11 @@ Instructions:
 4. Provide structured, concise responses with Markdown tables for tabular figures.
 """
 
+
 st.title("🤖 Kandypack Operations & Analytics Assistant")
-st.caption("AI-powered assistant for logistics tracking, pre-built reports, and custom SQL analytics.")
+st.caption(
+    "AI-powered assistant for logistics tracking, pre-built reports, and custom SQL analytics."
+)
 
 # Sidebar Presets
 with st.sidebar:
@@ -309,7 +396,9 @@ for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-user_input = st.session_state.pop("preset_prompt", None) or st.chat_input("Ask a logistics or reporting question...")
+user_input = st.session_state.pop("preset_prompt", None) or st.chat_input(
+    "Ask a logistics or reporting question..."
+)
 
 if user_input:
     st.session_state.chat_history.append({"role": "user", "content": user_input})
@@ -324,7 +413,9 @@ if user_input:
 
         while turn < max_turns:
             turn += 1
-            messages = [{"role": "system", "content": build_system_prompt()}] + st.session_state.chat_history
+            messages = [
+                {"role": "system", "content": build_system_prompt()}
+            ] + st.session_state.chat_history
 
             with st.spinner("Processing request..."):
                 try:
@@ -341,31 +432,39 @@ if user_input:
 
             # Handle Tool Calls
             if choice.tool_calls:
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": choice.content or "",
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
-                        for tc in choice.tool_calls
-                    ],
-                })
+                st.session_state.chat_history.append(
+                    {
+                        "role": "assistant",
+                        "content": choice.content or "",
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments,
+                                },
+                            }
+                            for tc in choice.tool_calls
+                        ],
+                    }
+                )
 
                 for tc in choice.tool_calls:
                     fn_name = tc.function.name
                     raw_args = tc.function.arguments
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                    args = (
+                        json.loads(raw_args)
+                        if isinstance(raw_args, str)
+                        else (raw_args or {})
+                    )
 
                     with st.status(f"Running `{fn_name}`...", expanded=False) as status:
                         if fn_name in TOOL_RUNNERS:
                             result = TOOL_RUNNERS[fn_name](args)
-                            status.update(label=f"`{fn_name}` finished", state="complete")
+                            status.update(
+                                label=f"`{fn_name}` finished", state="complete"
+                            )
                             if "data" in result and result["data"]:
                                 st.dataframe(result["data"])
                             else:
@@ -374,16 +473,20 @@ if user_input:
                             result = {"error": f"Tool '{fn_name}' not recognized."}
                             status.update(label=f"Failed `{fn_name}`", state="error")
 
-                    st.session_state.chat_history.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "name": fn_name,
-                        "content": json.dumps(result, default=str),
-                    })
+                    st.session_state.chat_history.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "name": fn_name,
+                            "content": json.dumps(sanitize(result), default=str),
+                        }
+                    )
                 continue
 
             # Assistant response completed
             final_text = choice.content or "No response returned."
             response_box.markdown(final_text)
-            st.session_state.chat_history.append({"role": "assistant", "content": final_text})
+            st.session_state.chat_history.append(
+                {"role": "assistant", "content": final_text}
+            )
             break

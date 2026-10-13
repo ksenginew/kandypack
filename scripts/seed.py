@@ -9,8 +9,7 @@ password_hash = ph.hash("password")
 
 random.seed(42)
 OUTPUT_FILE = "schema/01-seed.sql"
-BASE_TIME = datetime(2026, 10, 9, 8, 0, 0, tzinfo=timezone.utc)
-
+BASE_TIME = datetime(2026, 10, 13, 8, 0, 0, tzinfo=timezone.utc)
 
 FIRST_NAMES = [
     "Kavindu", "Nuwan", "Chameera", "Dinesh", "Saman", "Kasun", "Ruwan", "Dilshan",
@@ -75,7 +74,6 @@ TIME_SLOTS = [
 ]
 
 def sql_val(val):
-    """Formats Python values into standard PostgreSQL literal expressions."""
     if val is None:
         return "NULL"
     if isinstance(val, bool):
@@ -91,11 +89,9 @@ def sql_val(val):
     return f"'{escaped}'"
 
 def generate_phone(idx):
-    """Generates phone numbers complying with ^[0-9\\+\\-\\s\\(\\)\\.]{7,20}$."""
     return f"+94 77 {1000000 + (idx % 9000000):07d}"
 
 def write_bulk_insert(f, table_name, columns, rows_data, chunk_size=200, overriding_system=True):
-    """Writes batched INSERT statements with OVERRIDING SYSTEM VALUE."""
     col_list = ", ".join(columns)
     override_clause = " OVERRIDING SYSTEM VALUE" if overriding_system else ""
     
@@ -108,7 +104,6 @@ def write_bulk_insert(f, table_name, columns, rows_data, chunk_size=200, overrid
             val_lines.append(f"  ({formatted_vals})")
         f.write(",\n".join(val_lines))
         f.write(";\n\n")
-
 
 def main():
     print(f"Generating deterministic seed dataset into '{OUTPUT_FILE}'...")
@@ -148,7 +143,6 @@ def main():
                 BASE_TIME - timedelta(days=70 - i), BASE_TIME - timedelta(days=70 - i)
             ))
 
-        
         for i in range(47):
             uid = uuid.UUID(int=100 + i)
             first = FIRST_NAMES[(i + 5) % len(FIRST_NAMES)]
@@ -235,7 +229,6 @@ def main():
         store_assistants = {s_idx: [] for s_idx in range(1, 11)}
 
         for s_idx in range(1, 11):
-            
             for d_seq in range(3):
                 emp_name = f"{FIRST_NAMES[(emp_id * 2) % len(FIRST_NAMES)]} {LAST_NAMES[(emp_id * 3) % len(LAST_NAMES)]}"
                 phone = generate_phone(emp_id)
@@ -248,7 +241,6 @@ def main():
                 store_drivers[s_idx].append(emp_id)
                 emp_id += 1
 
-            
             for a_seq in range(3):
                 emp_name = f"{FIRST_NAMES[(emp_id * 5) % len(FIRST_NAMES)]} {LAST_NAMES[(emp_id * 7) % len(LAST_NAMES)]}"
                 phone = generate_phone(emp_id)
@@ -310,9 +302,15 @@ def main():
             products
         )
         total_rows += len(products)
+
         orders = []
         order_items = []
         item_id = 1
+
+        ALL_LIFECYCLES = [
+            "PLACED", "CANCELLED", "SCHEDULED", "IN_TRANSIT",
+            "STORE_RECEIVED", "OUT_FOR_DELIVERY", "DELIVERED", "DELIVERY_FAILED"
+        ]
 
         for o_id in range(1, 601):
             cust = customers[(o_id - 1) % len(customers)]
@@ -332,28 +330,15 @@ def main():
                 order_dt, order_dt
             ))
 
-            
             num_items = 2 + (o_id % 3)
-            
-            if days_offset < 28:
-                primary_status = "DELIVERED"
-            elif days_offset < 34:
-                primary_status = random.choice(["OUT_FOR_DELIVERY", "DELIVERED", "DELIVERY_FAILED"])
-            elif days_offset < 38:
-                primary_status = random.choice(["STORE_RECEIVED", "IN_TRANSIT"])
-            else:
-                primary_status = random.choice(["PLACED", "SCHEDULED"])
+            primary_status = ALL_LIFECYCLES[o_id % len(ALL_LIFECYCLES)]
 
             for _ in range(num_items):
                 p_choice = random.choice(products)
                 p_id = p_choice[0]
                 unit_price = p_choice[2]
                 qty = random.randint(1, 8)
-                
-                
                 item_status = primary_status
-                if item_status == "PLACED" and random.random() < 0.05:
-                    item_status = "CANCELLED"
 
                 for _ in range(qty):
                     order_items.append((
@@ -383,20 +368,20 @@ def main():
             dep_time = BASE_TIME - timedelta(days=38) + timedelta(days=day_step, hours=random.choice([4, 16]))
             cap = random.choice([10000.00, 15000.00, 20000.00, 30000.00])
             train_schedules.append((
-                ts_id, dest_store_id, dep_time, cap, admin_uid, admin_uid,
+                ts_id, dest_store_id, dep_time, cap, cap, admin_uid, admin_uid,
                 dep_time - timedelta(days=1), dep_time - timedelta(days=1)
             ))
 
         write_bulk_insert(
             f, "train_schedules",
-            ["id", "destination_store_id", "departure_timestamp", "max_capacity", "created_by", "updated_by", "created_at", "updated_at"],
+            ["id", "destination_store_id", "departure_timestamp", "max_capacity", "remaining_capacity", "created_by", "updated_by", "created_at", "updated_at"],
             train_schedules
         )
         total_rows += len(train_schedules)
 
         train_eligible_items = [
             item for item in order_items 
-            if item[5] in ("SCHEDULED", "IN_TRANSIT", "STORE_RECEIVED", "OUT_FOR_DELIVERY", "DELIVERED")
+            if item[4] in ("SCHEDULED", "IN_TRANSIT", "STORE_RECEIVED", "OUT_FOR_DELIVERY", "DELIVERED", "DELIVERY_FAILED")
         ]
         
         train_allocations = []
@@ -417,6 +402,7 @@ def main():
             train_allocations
         )
         total_rows += len(train_allocations)
+
         truck_schedules = []
         for sch_id in range(1, 251):
             chosen_truck = trucks[(sch_id - 1) % len(trucks)]
@@ -432,7 +418,6 @@ def main():
             duration = random.choice([2.5, 3.5, 4.0, 5.0])
             end_ts = start_ts + timedelta(hours=duration)
 
-            
             truck_schedules.append((
                 sch_id, truck_pk, route_pk, driver_pk, assistant_pk,
                 start_ts, end_ts, admin_uid, admin_uid,
@@ -459,9 +444,8 @@ def main():
             sched_id = sched[0]
             sched_start = sched[5]
             
-            
             delivered_ts = None
-            if deliv_item[5] == "DELIVERED":
+            if deliv_item[4] == "DELIVERED":
                 delivered_ts = sched_start + timedelta(hours=random.uniform(0.5, 2.2))
             
             truck_deliveries.append((
@@ -475,6 +459,7 @@ def main():
             truck_deliveries
         )
         total_rows += len(truck_deliveries)
+
         f.write("-- ---------------------------------------------------------\n")
         f.write("-- Sync Identity Sequences with Max Generated Primary Keys\n")
         f.write("-- ---------------------------------------------------------\n")
@@ -489,5 +474,6 @@ def main():
         f.write("\nCOMMIT;\n")
 
     print(f"Done. Successfully generated {total_rows} total seed rows in '{OUTPUT_FILE}'.")
+
 if __name__ == "__main__":
     main()
