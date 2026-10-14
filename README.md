@@ -83,16 +83,6 @@ The platform is designed to produce key operational and business intelligence re
 
 ---
 
-## ✨ Key Features & Web Interface
-
-- **📊 Dynamic Table Explorer**: Inspect tables in the `public` schema with custom pagination and row limits (50, 100, 500, 1,000).
-- **⚡ SQL Query Console**: Execute ad-hoc queries (`SELECT`, `INSERT`, `UPDATE`, `DELETE`, `DDL`) with tabular result display and affected row counters.
-- **🔄 Smart Cache Invalidation**: Automatic Streamlit cache invalidation when schema mutations or DML statements execute.
-- **🐳 Multi-Stage Docker Architecture**: Separate `dev` (live code reload via bind mounts) and `prod` (hardened non-root user, optimized) build targets.
-- **🐘 Integrated PostgreSQL 18 Service**: Automated healthchecks, persistent volumes, and pre-configured networking.
-
----
-
 ## 🛠️ Tech Stack
 
 - **Backend / Web UI**: [Streamlit](https://streamlit.io/) (Python 3.14)
